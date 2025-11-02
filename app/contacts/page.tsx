@@ -121,7 +121,7 @@ export default function ContactsPage() {
               Contacts
             </h1>
             <p className="text-sm text-muted-foreground">
-              Review and manage the people you collaborate with.
+              Review and manage your contacts
             </p>
           </div>
           <button

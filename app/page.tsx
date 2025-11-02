@@ -1,5 +1,7 @@
 import Link from "next/link";
-import { ArrowRight, UsersRound, UploadCloud, Sparkles } from "lucide-react";
+import { ArrowRight, UsersRound } from "lucide-react";
+import { Suspense } from "react";
+import { ContactsStat } from "@/components/contacts-stat";
 
 export default function Home() {
   return (
@@ -9,7 +11,7 @@ export default function Home() {
           Dashboard
         </span>
         <h1 className="text-3xl font-semibold tracking-tight text-foreground">
-          Welcome back, Kendal
+          Welcome back to Kendal
         </h1>
         <p className="max-w-2xl text-sm text-muted-foreground">
           Keep your contacts organized and synced across all of your tools.
@@ -43,36 +45,19 @@ export default function Home() {
         </div>
       </Link>
 
-      <section className="grid gap-4 md:grid-cols-3">
+      <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <div className="rounded-xl border bg-card p-6 shadow-sm">
           <div className="flex items-center justify-between text-sm text-muted-foreground">
             Total contacts
             <UsersRound className="h-4 w-4 opacity-60" aria-hidden="true" />
           </div>
-          <p className="mt-4 text-3xl font-semibold text-foreground">1,248</p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Updated yesterday
-          </p>
-        </div>
-        <div className="rounded-xl border bg-card p-6 shadow-sm">
-          <div className="flex items-center justify-between text-sm text-muted-foreground">
-            Imports this week
-            <UploadCloud className="h-4 w-4 opacity-60" aria-hidden="true" />
-          </div>
-          <p className="mt-4 text-3xl font-semibold text-foreground">3</p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Including 2 CSV uploads
-          </p>
-        </div>
-        <div className="rounded-xl border bg-card p-6 shadow-sm">
-          <div className="flex items-center justify-between text-sm text-muted-foreground">
-            Suggestions
-            <Sparkles className="h-4 w-4 opacity-60" aria-hidden="true" />
-          </div>
-          <p className="mt-4 text-3xl font-semibold text-foreground">8</p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Contacts missing phone numbers
-          </p>
+          <Suspense
+            fallback={
+              <div className="mt-6 h-9 w-20 animate-pulse rounded bg-muted/80" />
+            }
+          >
+            <ContactsStat />
+          </Suspense>
         </div>
       </section>
     </div>

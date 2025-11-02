@@ -31,15 +31,15 @@ export default function RootLayout({
       >
         <div className="flex min-h-screen flex-col bg-muted/20">
           <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/70">
-            <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-6">
+            <div className="mx-auto flex h-16 w-full  items-center justify-between px-6">
               <Link
                 href="/"
                 className="text-lg font-semibold tracking-tight text-foreground"
               >
-                Kendal Contacts
+                Kendal.ai
               </Link>
               <div className="flex items-center gap-6 text-sm text-muted-foreground">
-                <span className="hidden sm:inline">Last sync: 3 mins ago</span>
+             
                 <span className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 font-medium text-primary">
                   KM
                 </span>

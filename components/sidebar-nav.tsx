@@ -24,7 +24,7 @@ export function SidebarNav() {
   return (
     <nav className="flex flex-1 flex-col gap-2">
       <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        Overview
+        Dashboard
       </h2>
       <div className="mt-2 flex flex-col gap-1">
         {navItems.map((item) => {
