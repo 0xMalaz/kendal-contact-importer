@@ -6,6 +6,7 @@ import type { Timestamp } from "firebase/firestore";
 import { PlusCircle, Settings2 } from "lucide-react";
 import { ImportContactsModal } from "@/components/import-contacts-modal";
 import { ManageCustomFieldsModal } from "@/components/manage-custom-fields-modal";
+import { ViewCustomFieldsModal } from "@/components/view-custom-fields-modal";
 import { db } from "@/lib/firebase";
 
 type ContactRecord = {
@@ -24,7 +25,6 @@ type TableRow = {
   name: string;
   email: string;
   phone: string;
-  agent: string;
   createdOn: string;
 };
 
@@ -33,6 +33,14 @@ const COMPANY_ID = process.env.NEXT_PUBLIC_FIREBASE_COMPANY_ID;
 export default function ContactsPage() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isCustomFieldsModalOpen, setIsCustomFieldsModalOpen] = useState(false);
+  const [isViewCustomFieldsModalOpen, setIsViewCustomFieldsModalOpen] =
+    useState(false);
+  const [viewingContactName, setViewingContactName] = useState<string | null>(
+    null
+  );
+  const [viewingContact, setViewingContact] = useState<ContactRecord | null>(
+    null
+  );
   const [contacts, setContacts] = useState<ContactRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -100,19 +108,35 @@ export default function ContactsPage() {
                 day: "numeric",
                 year: "numeric",
               })
-            : "—";
+            : "-";
 
         return {
           id: contact.id,
           name: displayName || "Unknown contact",
-          email: contact.email ?? "—",
-          phone: contact.phone ?? "—",
-          agent: contact.agentUid ?? "Unassigned",
+          email: contact.email ?? "-",
+          phone: contact.phone ?? "-",
           createdOn,
         };
       }),
     [contacts]
   );
+
+  const handleViewCustomFields = (
+    contactId: string,
+    contactDisplayName: string
+  ) => {
+    const selectedContact =
+      contacts.find((contact) => contact.id === contactId) ?? null;
+    setViewingContact(selectedContact);
+    setViewingContactName(contactDisplayName);
+    setIsViewCustomFieldsModalOpen(true);
+  };
+
+  const handleCloseCustomFieldsModal = () => {
+    setIsViewCustomFieldsModalOpen(false);
+    setViewingContact(null);
+    setViewingContactName(null);
+  };
 
   return (
     <>
@@ -162,8 +186,8 @@ export default function ContactsPage() {
                   <th className="px-6 py-3">Name</th>
                   <th className="px-6 py-3">Email</th>
                   <th className="px-6 py-3">Phone</th>
-                  <th className="px-6 py-3">Assigned</th>
                   <th className="px-6 py-3">Created</th>
+                  <th className="px-6 py-3 text-right">Custom Fields</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/70 text-sm">
@@ -180,10 +204,10 @@ export default function ContactsPage() {
                         <div className="h-4 w-24 rounded bg-muted/80" />
                       </td>
                       <td className="px-6 py-4">
-                        <div className="h-4 w-20 rounded bg-muted/80" />
-                      </td>
-                      <td className="px-6 py-4">
                         <div className="h-4 w-24 rounded bg-muted/80" />
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <div className="ml-auto h-4 w-28 rounded bg-muted/80" />
                       </td>
                     </tr>
                   ))
@@ -209,10 +233,24 @@ export default function ContactsPage() {
                         {row.phone}
                       </td>
                       <td className="px-6 py-4 text-muted-foreground">
-                        {row.agent}
-                      </td>
-                      <td className="px-6 py-4 text-muted-foreground">
                         {row.createdOn}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleViewCustomFields(row.id, row.name)
+                          }
+                          disabled={!COMPANY_ID}
+                          className="text-sm font-medium text-primary transition hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground"
+                          title={
+                            COMPANY_ID
+                              ? undefined
+                              : "Company configuration is missing."
+                          }
+                        >
+                          See custom fields
+                        </button>
                       </td>
                     </tr>
                   ))
@@ -228,6 +266,13 @@ export default function ContactsPage() {
         onClose={() => setIsCustomFieldsModalOpen(false)}
         companyId={COMPANY_ID}
       />
+      <ViewCustomFieldsModal
+        open={isViewCustomFieldsModalOpen}
+        onClose={handleCloseCustomFieldsModal}
+        companyId={COMPANY_ID}
+        contactName={viewingContactName ?? undefined}
+        contactData={viewingContact ?? undefined}
+      />
 
       <ImportContactsModal
         open={isImportModalOpen}
@@ -236,3 +281,6 @@ export default function ContactsPage() {
     </>
   );
 }
+
+
+
