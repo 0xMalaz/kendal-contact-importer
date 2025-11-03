@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
+import { Toaster } from "react-hot-toast";
 import { SidebarNav } from "@/components/sidebar-nav";
 import "./globals.css";
 
@@ -51,9 +52,12 @@ export default function RootLayout({
               <SidebarNav />
             </aside>
             <main className="flex-1 overflow-y-auto">
-              <div className="mx-auto w-full max-w-6xl px-6 py-8">{children}</div>
+              <div className="mx-auto w-full max-w-6xl px-6 py-8">
+                {children}
+              </div>
             </main>
           </div>
+          <Toaster position="bottom-right" toastOptions={{ duration: 4000 }} />
         </div>
       </body>
     </html>

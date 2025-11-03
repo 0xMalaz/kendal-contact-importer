@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { Loader2, Minus, Paperclip, Sparkles, Upload } from "lucide-react";
+import toast from "react-hot-toast";
 import { cn } from "@/lib/utils";
 
 type ImportContactsModalProps = {
@@ -25,7 +26,7 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
   }, [onClose, reset]);
 
   const handleFiles = useCallback((files: FileList | null) => {
-    if (!files?.length) return;
+    if (!files?.length) return false;
     const nextFile = files[0];
     const allowedTypes = [
       "text/csv",
@@ -33,13 +34,20 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ];
 
+    const matchesExtension =
+      nextFile.name.toLowerCase().endsWith(".csv") ||
+      nextFile.name.toLowerCase().endsWith(".xlsx");
+
     if (
       allowedTypes.includes(nextFile.type) ||
-      nextFile.name.endsWith(".csv") ||
-      nextFile.name.endsWith(".xlsx")
+      matchesExtension
     ) {
       setFile(nextFile);
+      return true;
     }
+
+    toast.error("Only .csv and .xlsx formats are supported");
+    return false;
   }, []);
 
   const onDrop = useCallback(
@@ -137,7 +145,12 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
                   type="file"
                   accept=".csv,.xlsx"
                   className="hidden"
-                  onChange={(event) => handleFiles(event.target.files)}
+                  onChange={(event) => {
+                    const accepted = handleFiles(event.target.files);
+                    if (!accepted && event.target) {
+                      event.target.value = "";
+                    }
+                  }}
                 />
               </div>
             </section>
