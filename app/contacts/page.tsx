@@ -3,8 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { collection, getDocs, query } from "firebase/firestore";
 import type { Timestamp } from "firebase/firestore";
-import { PlusCircle } from "lucide-react";
+import { PlusCircle, Settings2 } from "lucide-react";
 import { ImportContactsModal } from "@/components/import-contacts-modal";
+import { ManageCustomFieldsModal } from "@/components/manage-custom-fields-modal";
 import { db } from "@/lib/firebase";
 
 type ContactRecord = {
@@ -30,7 +31,8 @@ type TableRow = {
 const COMPANY_ID = process.env.NEXT_PUBLIC_FIREBASE_COMPANY_ID;
 
 export default function ContactsPage() {
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isCustomFieldsModalOpen, setIsCustomFieldsModalOpen] = useState(false);
   const [contacts, setContacts] = useState<ContactRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -124,14 +126,28 @@ export default function ContactsPage() {
               Review and manage your contacts
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setIsModalOpen(true)}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:bg-primary/90"
-          >
-            <PlusCircle className="h-4 w-4" aria-hidden="true" />
-            Import Contacts
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsCustomFieldsModalOpen(true)}
+              className="inline-flex items-center gap-2 rounded-lg border border-muted-foreground/30 px-4 py-2 text-sm font-medium text-foreground shadow-sm transition hover:border-primary/40 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={!COMPANY_ID}
+              title={
+                COMPANY_ID ? undefined : "Company configuration is missing."
+              }
+            >
+              <Settings2 className="h-4 w-4" aria-hidden="true" />
+              Manage Custom Fields
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsImportModalOpen(true)}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:bg-primary/90"
+            >
+              <PlusCircle className="h-4 w-4" aria-hidden="true" />
+              Import Contacts
+            </button>
+          </div>
         </div>
 
         {error ? (
@@ -207,9 +223,15 @@ export default function ContactsPage() {
         )}
       </div>
 
+      <ManageCustomFieldsModal
+        open={isCustomFieldsModalOpen}
+        onClose={() => setIsCustomFieldsModalOpen(false)}
+        companyId={COMPANY_ID}
+      />
+
       <ImportContactsModal
-        open={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
+        open={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
       />
     </>
   );
