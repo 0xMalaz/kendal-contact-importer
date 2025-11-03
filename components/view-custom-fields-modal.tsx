@@ -1,9 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { collection, getDocs, query, where } from "firebase/firestore";
 import { Loader2, X } from "lucide-react";
-import { db } from "@/lib/firebase";
 
 type CustomFieldType = "text" | "number" | "phone" | "email" | "datetime";
 
@@ -21,6 +19,104 @@ type ViewCustomFieldsModalProps = {
   contactName?: string;
   contactData?: Record<string, unknown>;
 };
+
+function timestampToDate(value: unknown): Date | null {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? new Date(value) : null;
+  }
+
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  if (typeof value === "object") {
+    const maybeTimestamp = value as {
+      toDate?: () => Date;
+      toMillis?: () => number;
+      seconds?: number;
+      nanoseconds?: number;
+      _seconds?: number;
+      _nanoseconds?: number;
+    };
+
+    if (typeof maybeTimestamp.toDate === "function") {
+      try {
+        return maybeTimestamp.toDate();
+      } catch {
+        return null;
+      }
+    }
+
+    if (typeof maybeTimestamp.toMillis === "function") {
+      try {
+        const millis = maybeTimestamp.toMillis();
+        return Number.isFinite(millis) ? new Date(millis) : null;
+      } catch {
+        return null;
+      }
+    }
+
+    const seconds =
+      typeof maybeTimestamp.seconds === "number"
+        ? maybeTimestamp.seconds
+        : typeof maybeTimestamp._seconds === "number"
+          ? maybeTimestamp._seconds
+          : undefined;
+    const nanoseconds =
+      typeof maybeTimestamp.nanoseconds === "number"
+        ? maybeTimestamp.nanoseconds
+        : typeof maybeTimestamp._nanoseconds === "number"
+          ? maybeTimestamp._nanoseconds
+          : 0;
+
+    if (typeof seconds === "number") {
+      return new Date(seconds * 1000 + nanoseconds / 1_000_000);
+    }
+  }
+
+  return null;
+}
+
+function formatFieldValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "not set.";
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length ? trimmed : "not set.";
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (value instanceof Date) {
+    return value.toLocaleString();
+  }
+
+  if (Array.isArray(value)) {
+    return value.length
+      ? value.map((item) => formatFieldValue(item)).join(", ")
+      : "not set.";
+  }
+
+  const maybeDate = timestampToDate(value);
+  if (maybeDate) {
+    return maybeDate.toLocaleString();
+  }
+
+  return "not set.";
+}
 
 export function ViewCustomFieldsModal({
   open,
@@ -51,24 +147,34 @@ export function ViewCustomFieldsModal({
       setLoading(true);
       setError(null);
       try {
-        const fieldsRef = collection(
-          db,
-          "company",
-          companyId as string,
-          "contactFields"
+        const response = await fetch(
+          `/api/custom-fields?companyId=${encodeURIComponent(
+            companyId as string
+          )}&includeCore=false`
         );
-        const fieldsQuery = query(fieldsRef, where("core", "==", false));
-        const snapshot = await getDocs(fieldsQuery);
+
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`);
+        }
+
+        const data = (await response.json()) as {
+          fields?: Array<{
+            id: string;
+            label?: string;
+            type?: CustomFieldType;
+            core?: unknown;
+          }>;
+        };
+
         if (!isMounted) return;
 
-        const nextFields = snapshot.docs
-          .map(
-            (docSnapshot) =>
-              ({
-                id: docSnapshot.id,
-                ...(docSnapshot.data() as Omit<CustomField, "id">),
-              }) as CustomField
-          )
+        const nextFields = (data.fields ?? [])
+          .map((field) => ({
+            id: field.id,
+            label: field.label ?? field.id,
+            type: field.type ?? "text",
+            core: Boolean(field.core),
+          }))
           .sort((a, b) => a.label.localeCompare(b.label));
 
         setFields(nextFields);
@@ -106,33 +212,7 @@ export function ViewCustomFieldsModal({
 
   const getFieldValue = (field: CustomField) => {
     const rawValue = contactData ? contactData[field.id] : undefined;
-
-    if (
-      rawValue === null ||
-      rawValue === undefined ||
-      (typeof rawValue === "string" && rawValue.trim() === "")
-    ) {
-      return "not set.";
-    }
-
-    if (rawValue instanceof Date) {
-      return rawValue.toLocaleString();
-    }
-
-    if (
-      typeof rawValue === "object" &&
-      rawValue !== null &&
-      "toDate" in rawValue &&
-      typeof (rawValue as { toDate?: () => Date }).toDate === "function"
-    ) {
-      try {
-        return (rawValue as { toDate: () => Date }).toDate().toLocaleString();
-      } catch {
-        return "not set.";
-      }
-    }
-
-    return String(rawValue);
+    return formatFieldValue(rawValue);
   };
 
   return (

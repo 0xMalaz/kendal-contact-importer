@@ -1,19 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  collection,
-  deleteDoc,
-  doc,
-  getDocs,
-  query,
-  setDoc,
-  updateDoc,
-  where,
-} from "firebase/firestore";
 import { Loader2, Pencil, Plus, Save, Trash2, X } from "lucide-react";
 import toast from "react-hot-toast";
-import { db } from "@/lib/firebase";
 
 type CustomFieldType = "text" | "number" | "phone" | "email" | "datetime";
 
@@ -69,6 +58,24 @@ function createFieldId(label: string) {
     .join("");
 }
 
+function mapToCustomField(
+  field: {
+    id: string;
+    label?: string;
+    type?: CustomFieldType;
+    core?: unknown;
+    showAsColumn?: unknown;
+  }
+): CustomField {
+  return {
+    id: field.id,
+    label: field.label ?? field.id,
+    type: field.type ?? "text",
+    core: Boolean(field.core),
+    showAsColumn: Boolean(field.showAsColumn),
+  };
+}
+
 export function ManageCustomFieldsModal({
   open,
   onClose,
@@ -112,25 +119,30 @@ export function ManageCustomFieldsModal({
       setLoading(true);
       setError(null);
       try {
-        const fieldsRef = collection(
-          db,
-          "company",
-          companyId as string,
-          "contactFields"
+        const response = await fetch(
+          `/api/custom-fields?companyId=${encodeURIComponent(
+            companyId as string
+          )}&includeCore=false`
         );
-        const fieldsQuery = query(fieldsRef, where("core", "==", false));
-        const snapshot = await getDocs(fieldsQuery);
+
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`);
+        }
+
+        const data = (await response.json()) as {
+          fields?: Array<{
+            id: string;
+            label?: string;
+            type?: CustomFieldType;
+            core?: unknown;
+            showAsColumn?: unknown;
+          }>;
+        };
+
         if (!isMounted) return;
 
-        const nextFields = snapshot.docs
-          .map((docSnapshot) => {
-            const data = docSnapshot.data() as Omit<CustomField, "id">;
-            return {
-              id: docSnapshot.id,
-              ...data,
-              showAsColumn: Boolean(data.showAsColumn),
-            } as CustomField;
-          })
+        const nextFields = (data.fields ?? [])
+          .map((field) => mapToCustomField(field))
           .sort((a, b) => a.label.localeCompare(b.label));
 
         setFields(nextFields);
@@ -200,20 +212,38 @@ export function ManageCustomFieldsModal({
 
     setTogglingFieldId(field.id);
 
-    const fieldRef = doc(
-      db,
-      "company",
-      companyId as string,
-      "contactFields",
-      field.id
-    );
-
     try {
-      await updateDoc(fieldRef, { showAsColumn: checked });
+      const response = await fetch(`/api/custom-fields/${field.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          companyId,
+          showAsColumn: checked,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as {
+        field?: {
+          id: string;
+          label?: string;
+          type?: CustomFieldType;
+          core?: unknown;
+          showAsColumn?: unknown;
+        };
+      };
+
+      const updatedField = data.field
+        ? mapToCustomField(data.field)
+        : { ...field, showAsColumn: checked };
+
       setFields((prev) =>
-        prev.map((item) =>
-          item.id === field.id ? { ...item, showAsColumn: checked } : item
-        )
+        prev.map((item) => (item.id === field.id ? updatedField : item))
       );
       onFieldsChange?.();
     } catch (err) {
@@ -267,25 +297,42 @@ export function ManageCustomFieldsModal({
     setSaving(true);
     setFormError(null);
 
-    const collectionPath = collection(
-      db,
-      "company",
-      companyId as string,
-      "contactFields"
-    );
-
     try {
-      const newDocRef = doc(collectionPath, generatedId);
-      await setDoc(newDocRef, payload);
+      const response = await fetch("/api/custom-fields", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          companyId,
+          id: generatedId,
+          previousId:
+            editingId && editingId !== generatedId ? editingId : undefined,
+          ...payload,
+        }),
+      });
 
-      if (editingId && editingId !== generatedId) {
-        const oldDocRef = doc(collectionPath, editingId);
-        await deleteDoc(oldDocRef);
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
       }
+
+      const data = (await response.json()) as {
+        field?: {
+          id: string;
+          label?: string;
+          type?: CustomFieldType;
+          core?: unknown;
+          showAsColumn?: unknown;
+        };
+      };
+
+      const savedField = data.field
+        ? mapToCustomField(data.field)
+        : mapToCustomField({ id: generatedId, ...payload });
 
       setFields((prev) => {
         const filtered = prev.filter((field) => field.id !== editingId);
-        return [...filtered, { id: generatedId, ...payload }].sort((a, b) =>
+        return [...filtered, savedField].sort((a, b) =>
           a.label.localeCompare(b.label)
         );
       });
@@ -305,16 +352,19 @@ export function ManageCustomFieldsModal({
     if (!isReady) return;
 
     setDeletingId(fieldId);
-    const fieldRef = doc(
-      db,
-      "company",
-      companyId as string,
-      "contactFields",
-      fieldId
-    );
 
     try {
-      await deleteDoc(fieldRef);
+      const response = await fetch(
+        `/api/custom-fields/${fieldId}?companyId=${encodeURIComponent(
+          companyId as string
+        )}`,
+        { method: "DELETE" }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+
       setFields((prev) => prev.filter((field) => field.id !== fieldId));
       toast.success("Field deleted");
       onFieldsChange?.();

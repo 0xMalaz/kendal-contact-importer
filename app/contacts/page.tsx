@@ -1,13 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { collection, getDocs, query, where } from "firebase/firestore";
-import type { Timestamp } from "firebase/firestore";
 import { PlusCircle, Settings2 } from "lucide-react";
 import { ImportContactsModal } from "@/components/import-contacts-modal";
 import { ManageCustomFieldsModal } from "@/components/manage-custom-fields-modal";
 import { ViewCustomFieldsModal } from "@/components/view-custom-fields-modal";
-import { db } from "@/lib/firebase";
 
 type ContactRecord = {
   id: string;
@@ -16,7 +13,23 @@ type ContactRecord = {
   email?: string;
   phone?: string;
   agentUid?: string;
-  createdOn?: Timestamp | null;
+  createdOn?:
+    | {
+        seconds: number;
+        nanoseconds: number;
+      }
+    | {
+        _seconds: number;
+        _nanoseconds: number;
+      }
+    | {
+        toMillis?: () => number;
+        toDate?: () => Date;
+      }
+    | Date
+    | number
+    | string
+    | null;
   [key: string]: unknown;
 };
 
@@ -39,6 +52,123 @@ type TableRow = {
 };
 
 const COMPANY_ID = process.env.NEXT_PUBLIC_FIREBASE_COMPANY_ID;
+
+function timestampToDate(value: unknown): Date | null {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? new Date(value) : null;
+  }
+
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  if (typeof value === "object") {
+    const maybeTimestamp = value as {
+      toDate?: () => Date;
+      toMillis?: () => number;
+      seconds?: number;
+      nanoseconds?: number;
+      _seconds?: number;
+      _nanoseconds?: number;
+    };
+
+    if (typeof maybeTimestamp.toDate === "function") {
+      try {
+        return maybeTimestamp.toDate();
+      } catch {
+        return null;
+      }
+    }
+
+    if (typeof maybeTimestamp.toMillis === "function") {
+      try {
+        const millis = maybeTimestamp.toMillis();
+        return Number.isFinite(millis) ? new Date(millis) : null;
+      } catch {
+        return null;
+      }
+    }
+
+    const seconds =
+      typeof maybeTimestamp.seconds === "number"
+        ? maybeTimestamp.seconds
+        : typeof maybeTimestamp._seconds === "number"
+          ? maybeTimestamp._seconds
+          : undefined;
+    const nanoseconds =
+      typeof maybeTimestamp.nanoseconds === "number"
+        ? maybeTimestamp.nanoseconds
+        : typeof maybeTimestamp._nanoseconds === "number"
+          ? maybeTimestamp._nanoseconds
+          : 0;
+
+    if (typeof seconds === "number") {
+      const millis = seconds * 1000 + nanoseconds / 1_000_000;
+      return new Date(millis);
+    }
+  }
+
+  return null;
+}
+
+function timestampToMillis(value: unknown): number {
+  const date = timestampToDate(value);
+  return date ? date.getTime() : 0;
+}
+
+function formatTimestamp(value: unknown, fallback = "-"): string {
+  const date = timestampToDate(value);
+  if (!date) {
+    return fallback;
+  }
+
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function formatGenericValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "-";
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : "-";
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (value instanceof Date) {
+    return value.toLocaleString();
+  }
+
+  if (Array.isArray(value)) {
+    return value.length
+      ? value.map((item) => formatGenericValue(item)).join(", ")
+      : "-";
+  }
+
+  const maybeDate = timestampToDate(value);
+  if (maybeDate) {
+    return maybeDate.toLocaleString();
+  }
+
+  return "-";
+}
 
 export default function ContactsPage() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -72,30 +202,23 @@ export default function ContactsPage() {
       }
 
       try {
-        const contactsRef = collection(
-          db,
-          "company",
-          COMPANY_ID,
-          "contacts"
+        const response = await fetch(
+          `/api/contacts?companyId=${encodeURIComponent(COMPANY_ID)}`
         );
-        const contactsQuery = query(contactsRef);
-        const snapshot = await getDocs(contactsQuery);
-        const records = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...(doc.data() as Record<string, unknown>),
-        })) as ContactRecord[];
 
-        records.sort((a, b) => {
-          const aTime =
-            (a.createdOn && "toMillis" in a.createdOn
-              ? a.createdOn.toMillis()
-              : 0) ?? 0;
-          const bTime =
-            (b.createdOn && "toMillis" in b.createdOn
-              ? b.createdOn.toMillis()
-              : 0) ?? 0;
-          return bTime - aTime;
-        });
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`);
+        }
+
+        const data = (await response.json()) as {
+          contacts?: ContactRecord[];
+        };
+
+        const records = Array.isArray(data.contacts) ? data.contacts : [];
+
+        records.sort(
+          (a, b) => timestampToMillis(b.createdOn) - timestampToMillis(a.createdOn)
+        );
 
         setContacts(records);
       } catch (err) {
@@ -117,29 +240,32 @@ export default function ContactsPage() {
     }
 
     try {
-      const fieldsRef = collection(
-        db,
-        "company",
-        COMPANY_ID,
-        "contactFields"
+      const response = await fetch(
+        `/api/custom-fields?companyId=${encodeURIComponent(
+          COMPANY_ID
+        )}&includeCore=false`
       );
-      const fieldsQuery = query(fieldsRef, where("core", "==", false));
-      const snapshot = await getDocs(fieldsQuery);
-      const definitions = snapshot.docs
-        .map((docSnapshot) => {
-          const data = docSnapshot.data() as {
-            label?: string;
-            type?: CustomFieldType;
-            showAsColumn?: boolean;
-          };
 
-          return {
-            id: docSnapshot.id,
-            label: data.label ?? docSnapshot.id,
-            type: data.type ?? "text",
-            showAsColumn: Boolean(data.showAsColumn),
-          };
-        })
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as {
+        fields?: Array<{
+          id: string;
+          label?: string;
+          type?: CustomFieldType;
+          showAsColumn?: unknown;
+        }>;
+      };
+
+      const definitions = (data.fields ?? [])
+        .map((field) => ({
+          id: field.id,
+          label: field.label ?? field.id,
+          type: field.type ?? "text",
+          showAsColumn: Boolean(field.showAsColumn),
+        }))
         .sort((a, b) => a.label.localeCompare(b.label));
 
       setCustomFields(definitions);
@@ -170,14 +296,7 @@ export default function ContactsPage() {
         const firstName = (contact.firstName as string | undefined) ?? "";
         const lastName = (contact.lastName as string | undefined) ?? "";
         const displayName = [firstName, lastName].filter(Boolean).join(" ");
-        const createdOn =
-          contact.createdOn && "toDate" in contact.createdOn
-            ? contact.createdOn.toDate().toLocaleDateString(undefined, {
-                month: "short",
-                day: "numeric",
-                year: "numeric",
-              })
-            : "-";
+        const createdOn = formatTimestamp(contact.createdOn);
 
         return {
           id: contact.id,
@@ -201,43 +320,8 @@ export default function ContactsPage() {
   };
 
   const formatCustomFieldValue = useCallback(
-    (contact: ContactRecord, fieldId: string) => {
-      const rawValue = contact[fieldId];
-
-      if (rawValue === null || rawValue === undefined) {
-        return "-";
-      }
-
-      if (typeof rawValue === "string") {
-        const trimmed = rawValue.trim();
-        return trimmed.length > 0 ? trimmed : "-";
-      }
-
-      if (typeof rawValue === "number" || typeof rawValue === "boolean") {
-        return String(rawValue);
-      }
-
-      if (rawValue instanceof Date) {
-        return rawValue.toLocaleString();
-      }
-
-      if (Array.isArray(rawValue)) {
-        return rawValue.length ? rawValue.join(", ") : "-";
-      }
-
-      if (typeof rawValue === "object" && rawValue !== null) {
-        const maybeTimestamp = rawValue as { toDate?: () => Date };
-        if (typeof maybeTimestamp.toDate === "function") {
-          try {
-            return maybeTimestamp.toDate().toLocaleString();
-          } catch {
-            return "-";
-          }
-        }
-      }
-
-      return "-";
-    },
+    (contact: ContactRecord, fieldId: string) =>
+      formatGenericValue(contact[fieldId]),
     []
   );
 
@@ -420,5 +504,3 @@ export default function ContactsPage() {
     </>
   );
 }
-
-

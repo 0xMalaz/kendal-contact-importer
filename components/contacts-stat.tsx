@@ -1,10 +1,9 @@
 "use client";
 
-import { collection, getCountFromServer } from "firebase/firestore";
 import { useEffect, useState } from "react";
-import { db } from "@/lib/firebase";
 
 const COMPANY_ID = process.env.NEXT_PUBLIC_FIREBASE_COMPANY_ID;
+const FALLBACK_DISPLAY = "-";
 
 export function ContactsStat() {
   const [total, setTotal] = useState<number | null>(null);
@@ -18,17 +17,19 @@ export function ContactsStat() {
       }
 
       try {
-        const contactsRef = collection(
-          db,
-          "company",
-          COMPANY_ID,
-          "contacts"
+        const response = await fetch(
+          `/api/contacts/count?companyId=${encodeURIComponent(COMPANY_ID)}`
         );
-        const snapshot = await getCountFromServer(contactsRef);
-        setTotal(snapshot.data().count);
+
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`);
+        }
+
+        const data = (await response.json()) as { count?: number };
+        setTotal(typeof data.count === "number" ? data.count : null);
       } catch (err) {
         console.error("Failed to fetch contact count", err);
-        setError("—");
+        setError(FALLBACK_DISPLAY);
       }
     }
 
@@ -49,11 +50,9 @@ export function ContactsStat() {
   return (
     <>
       <p className="mt-4 text-3xl font-semibold text-foreground">
-        {total ?? "—"}
+        {total ?? FALLBACK_DISPLAY}
       </p>
-      <p className="mt-2 text-sm text-muted-foreground">
-        Updated just now
-      </p>
+      <p className="mt-2 text-sm text-muted-foreground">Updated just now</p>
     </>
   );
 }
