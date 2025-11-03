@@ -11,15 +11,28 @@ type RouteParams = {
 };
 
 export async function PATCH(request: Request, { params }: RouteParams) {
-  const fieldId = params.id;
+  // Derive field id reliably, even if params isn't populated by the runtime
+  const url = new URL(request.url);
+  const fallbackId = decodeURIComponent(
+    (url.pathname.split("/").pop() ?? "").trim()
+  );
+  const fieldId = (params?.id ?? fallbackId) as string;
 
   try {
-    const body = await request.json();
-    const { companyId, ...updates } = body ?? {};
+    const body = await request.json().catch(() => ({}));
+    const { companyId: bodyCompanyId, ...updates } = (body as any) ?? {};
+    const companyId = bodyCompanyId || url.searchParams.get("companyId");
 
-    if (!companyId) {
+    if (!companyId || typeof companyId !== "string" || !companyId.trim()) {
       return NextResponse.json(
         { error: "companyId is required" },
+        { status: 400 }
+      );
+    }
+
+    if (typeof fieldId !== "string" || fieldId.trim().length === 0) {
+      return NextResponse.json(
+        { error: "id is required in path" },
         { status: 400 }
       );
     }
@@ -37,7 +50,9 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       .collection("contactFields")
       .doc(fieldId);
 
-    await fieldRef.update(updates);
+    // Use merge to avoid failures when the document doesn't exist yet
+    // and to update only the provided fields.
+    await fieldRef.set(updates, { merge: true });
 
     const snapshot = await fieldRef.get();
 
@@ -46,6 +61,62 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     });
   } catch (error) {
     console.error("Failed to update custom field", error);
+    return NextResponse.json(
+      { error: "Failed to update custom field" },
+      { status: 500 }
+    );
+  }
+}
+
+// POST behaves like PATCH here: upsert partial updates for a field by id.
+export async function POST(request: Request, { params }: RouteParams) {
+  const url = new URL(request.url);
+  const fallbackId = decodeURIComponent(
+    (url.pathname.split("/").pop() ?? "").trim()
+  );
+  const fieldId = (params?.id ?? fallbackId) as string;
+
+  try {
+    const body = await request.json().catch(() => ({}));
+    const { companyId: bodyCompanyId, ...updates } = (body as any) ?? {};
+    const companyId = bodyCompanyId || url.searchParams.get("companyId");
+
+    if (!companyId || typeof companyId !== "string" || !companyId.trim()) {
+      return NextResponse.json(
+        { error: "companyId is required" },
+        { status: 400 }
+      );
+    }
+
+    if (typeof fieldId !== "string" || fieldId.trim().length === 0) {
+      return NextResponse.json(
+        { error: "id is required in path" },
+        { status: 400 }
+      );
+    }
+
+    if (!updates || Object.keys(updates).length === 0) {
+      return NextResponse.json(
+        { error: "At least one field to update is required" },
+        { status: 400 }
+      );
+    }
+
+    const fieldRef = adminDb
+      .collection("company")
+      .doc(companyId)
+      .collection("contactFields")
+      .doc(fieldId);
+
+    await fieldRef.set(updates, { merge: true });
+
+    const snapshot = await fieldRef.get();
+
+    return NextResponse.json({
+      field: { id: snapshot.id, ...snapshot.data() },
+    });
+  } catch (error) {
+    console.error("Failed to update custom field (POST)", error);
     return NextResponse.json(
       { error: "Failed to update custom field" },
       { status: 500 }

@@ -214,7 +214,7 @@ export function ManageCustomFieldsModal({
 
     try {
       const response = await fetch(`/api/custom-fields/${field.id}`, {
-        method: "PATCH",
+        method: "POST",
         headers: {
           "Content-Type": "application/json",
         },

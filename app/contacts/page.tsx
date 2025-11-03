@@ -389,13 +389,13 @@ export default function ContactsPage() {
                     <th className="px-6 py-3">Name</th>
                     <th className="px-6 py-3">Email</th>
                     <th className="px-6 py-3">Phone</th>
-                    <th className="px-6 py-3">Created</th>
                     {displayColumnFields.map((field) => (
                       <th key={field.id} className="px-6 py-3">
                         {field.label}
                       </th>
                     ))}
                     <th className="px-6 py-3">Custom Fields</th>
+                    <th className="px-6 py-3">Created</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/70 text-sm">
@@ -411,9 +411,6 @@ export default function ContactsPage() {
                         <td className="px-6 py-4">
                           <div className="h-4 w-24 rounded bg-muted/80" />
                         </td>
-                        <td className="px-6 py-4">
-                          <div className="h-4 w-24 rounded bg-muted/80" />
-                        </td>
                         {displayColumnFields.map((field) => (
                           <td key={`${field.id}-skeleton`} className="px-6 py-4">
                             <div className="h-4 w-24 rounded bg-muted/80" />
@@ -421,6 +418,9 @@ export default function ContactsPage() {
                         ))}
                         <td className="px-6 py-4">
                           <div className="h-4 w-28 rounded bg-muted/80" />
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="h-4 w-24 rounded bg-muted/80" />
                         </td>
                       </tr>
                     ))
@@ -444,9 +444,6 @@ export default function ContactsPage() {
                         </td>
                         <td className="px-6 py-4 text-muted-foreground">
                           {row.phone}
-                        </td>
-                        <td className="px-6 py-4 text-muted-foreground">
-                          {row.createdOn}
                         </td>
                         {displayColumnFields.map((field) => (
                           <td
@@ -472,6 +469,9 @@ export default function ContactsPage() {
                           >
                             View more
                           </button>
+                        </td>
+                        <td className="px-6 py-4 text-muted-foreground">
+                          {row.createdOn}
                         </td>
                       </tr>
                     ))
