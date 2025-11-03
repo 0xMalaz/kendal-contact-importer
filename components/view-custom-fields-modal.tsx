@@ -220,8 +220,12 @@ export function ViewCustomFieldsModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-8 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
+      onClick={onClose}
     >
-      <div className="flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden rounded-3xl border bg-background shadow-2xl">
+      <div
+        className="flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden rounded-3xl border bg-background shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
         <header className="flex items-center justify-between border-b px-6 py-4">
           <div>
             <h2 className="text-lg font-semibold text-foreground">
