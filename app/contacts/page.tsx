@@ -311,7 +311,7 @@ export default function ContactsPage() {
                         {field.label}
                       </th>
                     ))}
-                    <th className="px-6 py-3 text-right">Custom Fields</th>
+                    <th className="px-6 py-3">Custom Fields</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/70 text-sm">
@@ -335,8 +335,8 @@ export default function ContactsPage() {
                             <div className="h-4 w-24 rounded bg-muted/80" />
                           </td>
                         ))}
-                        <td className="px-6 py-4 text-right">
-                          <div className="ml-auto h-4 w-28 rounded bg-muted/80" />
+                        <td className="px-6 py-4">
+                          <div className="h-4 w-28 rounded bg-muted/80" />
                         </td>
                       </tr>
                     ))
@@ -372,7 +372,7 @@ export default function ContactsPage() {
                             {formatCustomFieldValue(row.contact, field.id)}
                           </td>
                         ))}
-                        <td className="px-6 py-4 text-right">
+                        <td className="px-6 py-4">
                           <button
                             type="button"
                             onClick={() =>
@@ -386,7 +386,7 @@ export default function ContactsPage() {
                                 : "Company configuration is missing."
                             }
                           >
-                            See custom fields
+                            View more
                           </button>
                         </td>
                       </tr>
@@ -420,6 +420,5 @@ export default function ContactsPage() {
     </>
   );
 }
-
 
 
