@@ -8,6 +8,7 @@ import {
   getDocs,
   query,
   setDoc,
+  updateDoc,
   where,
 } from "firebase/firestore";
 import { Loader2, Pencil, Plus, Save, Trash2, X } from "lucide-react";
@@ -21,12 +22,14 @@ type CustomField = {
   label: string;
   type: CustomFieldType;
   core: boolean;
+  showAsColumn?: boolean;
 };
 
 type ManageCustomFieldsModalProps = {
   open: boolean;
   onClose: () => void;
   companyId?: string;
+  onFieldsChange?: () => void;
 };
 
 type FormState = {
@@ -70,6 +73,7 @@ export function ManageCustomFieldsModal({
   open,
   onClose,
   companyId,
+  onFieldsChange,
 }: ManageCustomFieldsModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +84,7 @@ export function ManageCustomFieldsModal({
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [togglingFieldId, setTogglingFieldId] = useState<string | null>(null);
 
   const isReady = useMemo(() => Boolean(companyId), [companyId]);
 
@@ -118,13 +123,14 @@ export function ManageCustomFieldsModal({
         if (!isMounted) return;
 
         const nextFields = snapshot.docs
-          .map(
-            (docSnapshot) =>
-              ({
-                id: docSnapshot.id,
-                ...(docSnapshot.data() as Omit<CustomField, "id">),
-              }) as CustomField
-          )
+          .map((docSnapshot) => {
+            const data = docSnapshot.data() as Omit<CustomField, "id">;
+            return {
+              id: docSnapshot.id,
+              ...data,
+              showAsColumn: Boolean(data.showAsColumn),
+            } as CustomField;
+          })
           .sort((a, b) => a.label.localeCompare(b.label));
 
         setFields(nextFields);
@@ -154,6 +160,7 @@ export function ManageCustomFieldsModal({
       setError(null);
       resetForm();
       setLoading(false);
+      setTogglingFieldId(null);
     }
   }, [open, resetForm]);
 
@@ -169,6 +176,54 @@ export function ManageCustomFieldsModal({
     setFormState({ label: field.label, type: field.type });
     setFormError(null);
     setIsFormVisible(true);
+  };
+
+  const handleToggleShowAsColumn = async (
+    field: CustomField,
+    checked: boolean
+  ) => {
+    if (!isReady) return;
+
+    const currentActiveCount = fields.filter(
+      (item) => item.showAsColumn
+    ).length;
+    const nextActiveCount = checked
+      ? currentActiveCount + (field.showAsColumn ? 0 : 1)
+      : currentActiveCount - (field.showAsColumn ? 1 : 0);
+
+    if (checked && nextActiveCount > 3) {
+      toast.error("You can show up to 3 custom columns.", {
+        position: "bottom-right",
+      });
+      return;
+    }
+
+    setTogglingFieldId(field.id);
+
+    const fieldRef = doc(
+      db,
+      "company",
+      companyId as string,
+      "contactFields",
+      field.id
+    );
+
+    try {
+      await updateDoc(fieldRef, { showAsColumn: checked });
+      setFields((prev) =>
+        prev.map((item) =>
+          item.id === field.id ? { ...item, showAsColumn: checked } : item
+        )
+      );
+      onFieldsChange?.();
+    } catch (err) {
+      console.error("Failed to update column visibility", err);
+      toast.error("We couldn't update column visibility. Try again.", {
+        position: "bottom-right",
+      });
+    } finally {
+      setTogglingFieldId(null);
+    }
   };
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -198,10 +253,15 @@ export function ManageCustomFieldsModal({
       return;
     }
 
+    const existingField = editingId
+      ? fields.find((field) => field.id === editingId)
+      : undefined;
+
     const payload = {
       label,
       type: formState.type,
       core: false,
+      showAsColumn: existingField?.showAsColumn ?? false,
     };
 
     setSaving(true);
@@ -231,6 +291,7 @@ export function ManageCustomFieldsModal({
       });
 
       toast.success(editingId ? "Field updated" : "Field added");
+      onFieldsChange?.();
       resetForm();
     } catch (err) {
       console.error("Failed to save custom field", err);
@@ -256,6 +317,7 @@ export function ManageCustomFieldsModal({
       await deleteDoc(fieldRef);
       setFields((prev) => prev.filter((field) => field.id !== fieldId));
       toast.success("Field deleted");
+      onFieldsChange?.();
     } catch (err) {
       console.error("Failed to delete custom field", err);
       toast.error("We couldn't delete this field. Try again.");
@@ -345,7 +407,7 @@ export function ManageCustomFieldsModal({
                     {fields.map((field) => (
                       <li
                         key={field.id}
-                        className="flex items-center justify-between rounded-xl border bg-card px-4 py-3 shadow-sm"
+                        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card px-4 py-3 shadow-sm"
                       >
                         <div>
                           <p className="text-sm font-semibold text-foreground">
@@ -358,28 +420,45 @@ export function ManageCustomFieldsModal({
                             )?.label ?? field.type}
                           </p>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleStartEdit(field)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-muted-foreground/20 px-3 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-muted"
-                          >
-                            <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(field.id)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-destructive/40 px-3 py-1.5 text-xs font-medium text-destructive transition hover:bg-destructive/10 disabled:opacity-50"
-                            disabled={deletingId === field.id}
-                          >
-                            {deletingId === field.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                            )}
-                            Delete
-                          </button>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <label className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded-full border border-muted-foreground/40 text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed"
+                              checked={Boolean(field.showAsColumn)}
+                              onChange={(event) =>
+                                handleToggleShowAsColumn(
+                                  field,
+                                  event.target.checked
+                                )
+                              }
+                              disabled={togglingFieldId === field.id}
+                            />
+                            Show as a Column
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleStartEdit(field)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-muted-foreground/20 px-3 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-muted"
+                            >
+                              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(field.id)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-destructive/40 px-3 py-1.5 text-xs font-medium text-destructive transition hover:bg-destructive/10 disabled:opacity-50"
+                              disabled={deletingId === field.id}
+                            >
+                              {deletingId === field.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                              )}
+                              Delete
+                            </button>
+                          </div>
                         </div>
                       </li>
                     ))}

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { collection, getDocs, query } from "firebase/firestore";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { collection, getDocs, query, where } from "firebase/firestore";
 import type { Timestamp } from "firebase/firestore";
 import { PlusCircle, Settings2 } from "lucide-react";
 import { ImportContactsModal } from "@/components/import-contacts-modal";
@@ -20,12 +20,22 @@ type ContactRecord = {
   [key: string]: unknown;
 };
 
+type CustomFieldType = "text" | "number" | "phone" | "email" | "datetime";
+
+type CustomFieldDefinition = {
+  id: string;
+  label: string;
+  type: CustomFieldType;
+  showAsColumn?: boolean;
+};
+
 type TableRow = {
   id: string;
   name: string;
   email: string;
   phone: string;
   createdOn: string;
+  contact: ContactRecord;
 };
 
 const COMPANY_ID = process.env.NEXT_PUBLIC_FIREBASE_COMPANY_ID;
@@ -44,6 +54,10 @@ export default function ContactsPage() {
   const [contacts, setContacts] = useState<ContactRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>([]);
+  const [customFieldsError, setCustomFieldsError] = useState<string | null>(
+    null
+  );
 
   useEffect(() => {
     async function fetchContacts() {
@@ -86,7 +100,7 @@ export default function ContactsPage() {
         setContacts(records);
       } catch (err) {
         console.error("Failed to load contacts", err);
-        setError("We couldn’t load your contacts. Try again in a moment.");
+        setError("We couldn't load your contacts. Try again in a moment.");
       } finally {
         setLoading(false);
       }
@@ -95,11 +109,66 @@ export default function ContactsPage() {
     fetchContacts();
   }, []);
 
+  const loadCustomFields = useCallback(async () => {
+    if (!COMPANY_ID) {
+      setCustomFields([]);
+      setCustomFieldsError(null);
+      return;
+    }
+
+    try {
+      const fieldsRef = collection(
+        db,
+        "company",
+        COMPANY_ID,
+        "contactFields"
+      );
+      const fieldsQuery = query(fieldsRef, where("core", "==", false));
+      const snapshot = await getDocs(fieldsQuery);
+      const definitions = snapshot.docs
+        .map((docSnapshot) => {
+          const data = docSnapshot.data() as {
+            label?: string;
+            type?: CustomFieldType;
+            showAsColumn?: boolean;
+          };
+
+          return {
+            id: docSnapshot.id,
+            label: data.label ?? docSnapshot.id,
+            type: data.type ?? "text",
+            showAsColumn: Boolean(data.showAsColumn),
+          };
+        })
+        .sort((a, b) => a.label.localeCompare(b.label));
+
+      setCustomFields(definitions);
+      setCustomFieldsError(null);
+    } catch (err) {
+      console.error("Failed to load custom field settings", err);
+      setCustomFieldsError(
+        "We couldn't load custom field settings. Custom columns may be outdated."
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadCustomFields();
+  }, [loadCustomFields]);
+
+  const displayColumnFields = useMemo(
+    () =>
+      customFields
+        .filter((field) => field.showAsColumn)
+        .slice(0, 3),
+    [customFields]
+  );
+
   const rows: TableRow[] = useMemo(
     () =>
       contacts.map((contact) => {
-        const firstName = contact.firstName ?? "";
-        const lastName = contact.lastName ?? "";
+        const firstName = (contact.firstName as string | undefined) ?? "";
+        const lastName = (contact.lastName as string | undefined) ?? "";
         const displayName = [firstName, lastName].filter(Boolean).join(" ");
         const createdOn =
           contact.createdOn && "toDate" in contact.createdOn
@@ -113,24 +182,68 @@ export default function ContactsPage() {
         return {
           id: contact.id,
           name: displayName || "Unknown contact",
-          email: contact.email ?? "-",
-          phone: contact.phone ?? "-",
+          email: (contact.email as string | undefined) ?? "-",
+          phone: (contact.phone as string | undefined) ?? "-",
           createdOn,
+          contact,
         };
       }),
     [contacts]
   );
 
   const handleViewCustomFields = (
-    contactId: string,
+    contact: ContactRecord,
     contactDisplayName: string
   ) => {
-    const selectedContact =
-      contacts.find((contact) => contact.id === contactId) ?? null;
-    setViewingContact(selectedContact);
+    setViewingContact(contact);
     setViewingContactName(contactDisplayName);
     setIsViewCustomFieldsModalOpen(true);
   };
+
+  const formatCustomFieldValue = useCallback(
+    (contact: ContactRecord, fieldId: string) => {
+      const rawValue = contact[fieldId];
+
+      if (rawValue === null || rawValue === undefined) {
+        return "-";
+      }
+
+      if (typeof rawValue === "string") {
+        const trimmed = rawValue.trim();
+        return trimmed.length > 0 ? trimmed : "-";
+      }
+
+      if (typeof rawValue === "number" || typeof rawValue === "boolean") {
+        return String(rawValue);
+      }
+
+      if (rawValue instanceof Date) {
+        return rawValue.toLocaleString();
+      }
+
+      if (Array.isArray(rawValue)) {
+        return rawValue.length ? rawValue.join(", ") : "-";
+      }
+
+      if (typeof rawValue === "object" && rawValue !== null) {
+        const maybeTimestamp = rawValue as { toDate?: () => Date };
+        if (typeof maybeTimestamp.toDate === "function") {
+          try {
+            return maybeTimestamp.toDate().toLocaleString();
+          } catch {
+            return "-";
+          }
+        }
+      }
+
+      return "-";
+    },
+    []
+  );
+
+  const handleCustomFieldsRefresh = useCallback(() => {
+    void loadCustomFields();
+  }, [loadCustomFields]);
 
   const handleCloseCustomFieldsModal = () => {
     setIsViewCustomFieldsModalOpen(false);
@@ -179,84 +292,109 @@ export default function ContactsPage() {
             {error}
           </div>
         ) : (
-          <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
-            <table className="min-w-full divide-y divide-border/70">
-              <thead className="bg-muted/60">
-                <tr className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  <th className="px-6 py-3">Name</th>
-                  <th className="px-6 py-3">Email</th>
-                  <th className="px-6 py-3">Phone</th>
-                  <th className="px-6 py-3">Created</th>
-                  <th className="px-6 py-3 text-right">Custom Fields</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/70 text-sm">
-                {loading ? (
-                  Array.from({ length: 6 }).map((_, index) => (
-                    <tr key={`skeleton-${index}`} className="animate-pulse">
-                      <td className="px-6 py-4">
-                        <div className="h-4 w-32 rounded bg-muted/80" />
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="h-4 w-40 rounded bg-muted/80" />
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="h-4 w-24 rounded bg-muted/80" />
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="h-4 w-24 rounded bg-muted/80" />
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="ml-auto h-4 w-28 rounded bg-muted/80" />
-                      </td>
-                    </tr>
-                  ))
-                ) : rows.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={5}
-                      className="px-6 py-16 text-center text-sm text-muted-foreground"
-                    >
-                      No contacts found. Import a CSV to get started.
-                    </td>
+          <div className="space-y-4">
+            {customFieldsError ? (
+              <div className="rounded-lg border border-muted-foreground/30 bg-muted/20 px-6 py-3 text-xs text-muted-foreground">
+                {customFieldsError}
+              </div>
+            ) : null}
+            <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+              <table className="min-w-full divide-y divide-border/70">
+                <thead className="bg-muted/60">
+                  <tr className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    <th className="px-6 py-3">Name</th>
+                    <th className="px-6 py-3">Email</th>
+                    <th className="px-6 py-3">Phone</th>
+                    <th className="px-6 py-3">Created</th>
+                    {displayColumnFields.map((field) => (
+                      <th key={field.id} className="px-6 py-3">
+                        {field.label}
+                      </th>
+                    ))}
+                    <th className="px-6 py-3 text-right">Custom Fields</th>
                   </tr>
-                ) : (
-                  rows.map((row) => (
-                    <tr key={row.id} className="transition hover:bg-muted/60">
-                      <td className="px-6 py-4 font-medium text-foreground">
-                        {row.name}
-                      </td>
-                      <td className="px-6 py-4 text-muted-foreground">
-                        {row.email}
-                      </td>
-                      <td className="px-6 py-4 text-muted-foreground">
-                        {row.phone}
-                      </td>
-                      <td className="px-6 py-4 text-muted-foreground">
-                        {row.createdOn}
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleViewCustomFields(row.id, row.name)
-                          }
-                          disabled={!COMPANY_ID}
-                          className="text-sm font-medium text-primary transition hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground"
-                          title={
-                            COMPANY_ID
-                              ? undefined
-                              : "Company configuration is missing."
-                          }
-                        >
-                          See custom fields
-                        </button>
+                </thead>
+                <tbody className="divide-y divide-border/70 text-sm">
+                  {loading ? (
+                    Array.from({ length: 6 }).map((_, index) => (
+                      <tr key={`skeleton-${index}`} className="animate-pulse">
+                        <td className="px-6 py-4">
+                          <div className="h-4 w-32 rounded bg-muted/80" />
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="h-4 w-40 rounded bg-muted/80" />
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="h-4 w-24 rounded bg-muted/80" />
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="h-4 w-24 rounded bg-muted/80" />
+                        </td>
+                        {displayColumnFields.map((field) => (
+                          <td key={`${field.id}-skeleton`} className="px-6 py-4">
+                            <div className="h-4 w-24 rounded bg-muted/80" />
+                          </td>
+                        ))}
+                        <td className="px-6 py-4 text-right">
+                          <div className="ml-auto h-4 w-28 rounded bg-muted/80" />
+                        </td>
+                      </tr>
+                    ))
+                  ) : rows.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={5 + displayColumnFields.length}
+                        className="px-6 py-16 text-center text-sm text-muted-foreground"
+                      >
+                        No contacts found. Import a CSV to get started.
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ) : (
+                    rows.map((row) => (
+                      <tr key={row.id} className="transition hover:bg-muted/60">
+                        <td className="px-6 py-4 font-medium text-foreground">
+                          {row.name}
+                        </td>
+                        <td className="px-6 py-4 text-muted-foreground">
+                          {row.email}
+                        </td>
+                        <td className="px-6 py-4 text-muted-foreground">
+                          {row.phone}
+                        </td>
+                        <td className="px-6 py-4 text-muted-foreground">
+                          {row.createdOn}
+                        </td>
+                        {displayColumnFields.map((field) => (
+                          <td
+                            key={`${row.id}-${field.id}`}
+                            className="px-6 py-4 text-muted-foreground"
+                          >
+                            {formatCustomFieldValue(row.contact, field.id)}
+                          </td>
+                        ))}
+                        <td className="px-6 py-4 text-right">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleViewCustomFields(row.contact, row.name)
+                            }
+                            disabled={!COMPANY_ID}
+                            className="text-sm font-medium text-primary transition hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground"
+                            title={
+                              COMPANY_ID
+                                ? undefined
+                                : "Company configuration is missing."
+                            }
+                          >
+                            See custom fields
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>
@@ -265,6 +403,7 @@ export default function ContactsPage() {
         open={isCustomFieldsModalOpen}
         onClose={() => setIsCustomFieldsModalOpen(false)}
         companyId={COMPANY_ID}
+        onFieldsChange={handleCustomFieldsRefresh}
       />
       <ViewCustomFieldsModal
         open={isViewCustomFieldsModalOpen}
