@@ -191,7 +191,7 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
       setParsingState("parsing");
       setParseProgress(0);
       try {
-        const PapaModule = await import("papaparse");
+        const PapaModule = await import("papaparse"); // dynamic import for smaller bundle size as we only need this during parsing
         const Papa = (PapaModule.default ?? PapaModule) as typeof import("papaparse");
 
         await new Promise<void>((resolve, reject) => {
