@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { PlusCircle, Settings2 } from "lucide-react";
+import { Ellipsis, Loader2, PlusCircle, Settings2 } from "lucide-react";
+import toast from "react-hot-toast";
 import { ImportContactsModal } from "@/components/import-contacts-modal";
 import { ManageCustomFieldsModal } from "@/components/manage-custom-fields-modal";
 import { ViewCustomFieldsModal } from "@/components/view-custom-fields-modal";
@@ -188,6 +189,42 @@ export default function ContactsPage() {
   const [customFieldsError, setCustomFieldsError] = useState<string | null>(
     null
   );
+  const [openContactActionsId, setOpenContactActionsId] = useState<string | null>(
+    null
+  );
+  const [deletingContactId, setDeletingContactId] = useState<string | null>(
+    null
+  );
+
+  useEffect(() => {
+    if (!openContactActionsId) {
+      return;
+    }
+
+    function handlePointer(event: MouseEvent | TouchEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[data-contact-actions-root='true']")) {
+        return;
+      }
+      setOpenContactActionsId(null);
+    }
+
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpenContactActionsId(null);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointer);
+    document.addEventListener("touchstart", handlePointer);
+    document.addEventListener("keydown", handleKey);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointer);
+      document.removeEventListener("touchstart", handlePointer);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [openContactActionsId]);
 
   useEffect(() => {
     async function fetchContacts() {
@@ -329,6 +366,58 @@ export default function ContactsPage() {
     void loadCustomFields();
   }, [loadCustomFields]);
 
+  const toggleContactActions = useCallback((contactId: string) => {
+    setOpenContactActionsId((previous) =>
+      previous === contactId ? null : contactId
+    );
+  }, []);
+
+  const handleDeleteContact = useCallback(
+    async (contactId: string) => {
+      if (!COMPANY_ID) {
+        toast.error("Company configuration is missing.");
+        setOpenContactActionsId(null);
+        return;
+      }
+
+      setDeletingContactId(contactId);
+
+      try {
+        const response = await fetch(
+          `/api/contacts/${encodeURIComponent(
+            contactId
+          )}?companyId=${encodeURIComponent(COMPANY_ID)}`,
+          { method: "DELETE" }
+        );
+
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as
+            | { error?: string }
+            | null;
+          const message =
+            payload?.error ?? `Request failed with status ${response.status}`;
+          throw new Error(message);
+        }
+
+        setContacts((previous) =>
+          previous.filter((contact) => contact.id !== contactId)
+        );
+        toast.success("Contact deleted.");
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Failed to delete contact.";
+        console.error("Failed to delete contact", err);
+        toast.error(message);
+      } finally {
+        setDeletingContactId(null);
+        setOpenContactActionsId((previous) =>
+          previous === contactId ? null : previous
+        );
+      }
+    },
+    [setContacts]
+  );
+
   const handleCloseCustomFieldsModal = () => {
     setIsViewCustomFieldsModalOpen(false);
     setViewingContact(null);
@@ -382,9 +471,10 @@ export default function ContactsPage() {
                 {customFieldsError}
               </div>
             ) : null}
-            <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
-              <table className="min-w-full divide-y divide-border/70">
-                <thead className="bg-muted/60">
+            <div className="relative rounded-xl border bg-card shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-border/70">
+                  <thead className="bg-muted/60">
                   <tr className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     <th className="px-6 py-3">Name</th>
                     <th className="px-6 py-3">Email</th>
@@ -396,6 +486,7 @@ export default function ContactsPage() {
                     ))}
                     <th className="px-6 py-3">Custom Fields</th>
                     <th className="px-6 py-3">Created</th>
+                    <th className="px-6 py-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/70 text-sm">
@@ -422,12 +513,15 @@ export default function ContactsPage() {
                         <td className="px-6 py-4">
                           <div className="h-4 w-24 rounded bg-muted/80" />
                         </td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="ml-auto h-8 w-8 rounded-full bg-muted/80" />
+                        </td>
                       </tr>
                     ))
                   ) : rows.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={5 + displayColumnFields.length}
+                        colSpan={6 + displayColumnFields.length}
                         className="px-6 py-16 text-center text-sm text-muted-foreground"
                       >
                         No contacts found. Import a CSV to get started.
@@ -473,11 +567,55 @@ export default function ContactsPage() {
                         <td className="px-6 py-4 text-muted-foreground">
                           {row.createdOn}
                         </td>
+                        <td
+                          className="relative px-6 py-4 text-right"
+                          data-contact-actions-root="true"
+                        >
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggleContactActions(row.id);
+                            }}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-transparent text-muted-foreground transition hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                            aria-haspopup="menu"
+                            aria-expanded={openContactActionsId === row.id}
+                            aria-label={`Open actions for ${row.name}`}
+                          >
+                            <Ellipsis className="h-4 w-4" aria-hidden="true" />
+                          </button>
+                          {openContactActionsId === row.id ? (
+                            <div
+                              role="menu"
+                              className="absolute right-6 top-10 z-10 min-w-[150px] overflow-hidden rounded-lg border border-border/60 bg-card text-left shadow-xl"
+                            >
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void handleDeleteContact(row.id);
+                                }}
+                                className="flex w-full items-center justify-between gap-3 px-4 py-2 text-sm text-destructive transition hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                disabled={deletingContactId === row.id}
+                                role="menuitem"
+                              >
+                                Delete
+                                {deletingContactId === row.id ? (
+                                  <Loader2
+                                    className="h-3.5 w-3.5 animate-spin"
+                                    aria-hidden="true"
+                                  />
+                                ) : null}
+                              </button>
+                            </div>
+                          ) : null}
+                        </td>
                       </tr>
                     ))
                   )}
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
         )}

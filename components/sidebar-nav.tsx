@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Home, Users } from "lucide-react";
+import { Home, User, Users } from "lucide-react";
 
 const navItems = [
   {
@@ -15,6 +15,11 @@ const navItems = [
     href: "/contacts",
     label: "Contacts",
     icon: Users,
+  },
+  {
+    href: "/agents",
+    label: "Agents",
+    icon: User,
   },
 ];
 
