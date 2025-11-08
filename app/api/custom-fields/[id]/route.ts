@@ -5,9 +5,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type RouteParams = {
-  params: {
+  params: Promise<{
     id: string;
-  };
+  }>;
 };
 
 export async function PATCH(request: Request, { params }: RouteParams) {
@@ -16,7 +16,8 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   const fallbackId = decodeURIComponent(
     (url.pathname.split("/").pop() ?? "").trim()
   );
-  const fieldId = (params?.id ?? fallbackId) as string;
+  const resolvedParams = await params;
+  const fieldId = (resolvedParams?.id ?? fallbackId) as string;
 
   try {
     const body = await request.json().catch(() => ({}));
@@ -74,7 +75,8 @@ export async function POST(request: Request, { params }: RouteParams) {
   const fallbackId = decodeURIComponent(
     (url.pathname.split("/").pop() ?? "").trim()
   );
-  const fieldId = (params?.id ?? fallbackId) as string;
+  const resolvedParams = await params;
+  const fieldId = (resolvedParams?.id ?? fallbackId) as string;
 
   try {
     const body = await request.json().catch(() => ({}));
@@ -125,9 +127,13 @@ export async function POST(request: Request, { params }: RouteParams) {
 }
 
 export async function DELETE(request: Request, { params }: RouteParams) {
-  const fieldId = params.id;
-  const { searchParams } = new URL(request.url);
-  const companyId = searchParams.get("companyId");
+  const url = new URL(request.url);
+  const fallbackId = decodeURIComponent(
+    (url.pathname.split("/").pop() ?? "").trim()
+  );
+  const resolvedParams = await params;
+  const fieldId = (resolvedParams?.id ?? fallbackId) as string;
+  const companyId = url.searchParams.get("companyId");
 
   if (!companyId) {
     return NextResponse.json(
