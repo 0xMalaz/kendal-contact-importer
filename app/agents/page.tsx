@@ -336,7 +336,7 @@ export default function AgentsPage() {
                         {openAgentActionsId === agent.id ? (
                           <div
                             role="menu"
-                            className="absolute right-6 top-10 z-10 min-w-[150px] overflow-hidden rounded-lg border border-border/60 bg-card text-left shadow-xl"
+                            className="absolute right-6 top-2 z-10 min-w-[150px] -translate-y-full overflow-hidden rounded-lg border border-border/60 bg-card text-left shadow-xl"
                           >
                             <button
                               type="button"
