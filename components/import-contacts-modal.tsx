@@ -527,7 +527,9 @@ export function ImportContactsModal({
     headersRef.current = [];
     parsedRowsRef.current = [];
 
-    async function parseSelectedFile() {
+    const currentFile = file;
+
+    async function parseSelectedFile(selectedFile: File) {
       setParsingState("parsing");
       setParseProgress(0);
       try {
@@ -536,7 +538,7 @@ export function ImportContactsModal({
           PapaModule) as typeof import("papaparse");
 
         await new Promise<void>((resolve, reject) => {
-          Papa.parse(file, {
+          Papa.parse(selectedFile, {
             header: true,
             worker: true,
             skipEmptyLines: "greedy",
@@ -622,10 +624,14 @@ export function ImportContactsModal({
                   ? results.meta.cursor
                   : null;
 
-              if (cursor !== null && Number.isFinite(cursor) && file.size > 0) {
+              if (
+                cursor !== null &&
+                Number.isFinite(cursor) &&
+                selectedFile.size > 0
+              ) {
                 const nextProgress = Math.min(
                   0.99,
-                  Math.max(0, cursor / file.size)
+                  Math.max(0, cursor / selectedFile.size)
                 );
                 setParseProgress((previous) =>
                   nextProgress > previous ? nextProgress : previous
@@ -713,7 +719,7 @@ export function ImportContactsModal({
       }
     }
 
-    parseSelectedFile();
+    parseSelectedFile(currentFile);
 
     return () => {
       isCancelled = true;

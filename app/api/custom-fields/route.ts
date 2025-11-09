@@ -4,6 +4,13 @@ import { adminDb } from "@/lib/firebase-admin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type ContactFieldRecord = {
+  id: string;
+  core?: boolean;
+  label?: unknown;
+  [key: string]: unknown;
+};
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const companyId = searchParams.get("companyId");
@@ -26,9 +33,9 @@ export async function GET(request: Request) {
     const snapshot = await fieldsRef.get();
 
     const fields = snapshot.docs
-      .map((docSnapshot) => ({
+      .map<ContactFieldRecord>((docSnapshot) => ({
         id: docSnapshot.id,
-        ...docSnapshot.data(),
+        ...(docSnapshot.data() as Record<string, unknown>),
       }))
       .filter((field) => includeCore || field.core === false)
       .sort((a, b) => {

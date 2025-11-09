@@ -4,6 +4,12 @@ import { adminDb } from "@/lib/firebase-admin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type ContactRecord = {
+  id: string;
+  createdOn?: unknown;
+  [key: string]: unknown;
+};
+
 function getTimestampMillis(value: unknown) {
   if (!value || typeof value !== "object") {
     return 0;
@@ -50,10 +56,13 @@ export async function GET(request: Request) {
 
     const snapshot = await contactsRef.get();
 
-    const contacts = snapshot.docs.map((docSnapshot) => ({
-      id: docSnapshot.id,
-      ...docSnapshot.data(),
-    }));
+    const contacts: ContactRecord[] = snapshot.docs.map((docSnapshot) => {
+      const data = docSnapshot.data() as Record<string, unknown>;
+      return {
+        id: docSnapshot.id,
+        ...data,
+      };
+    });
 
     contacts.sort(
       (a, b) =>
