@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Ellipsis, Loader2, PlusCircle, Settings2 } from "lucide-react";
+import { Ellipsis, Loader2, PlusCircle, Search, Settings2 } from "lucide-react";
 import toast from "react-hot-toast";
 import { ImportContactsModal } from "@/components/import-contacts-modal";
 import { ManageCustomFieldsModal } from "@/components/manage-custom-fields-modal";
@@ -48,8 +48,17 @@ type TableRow = {
   name: string;
   email: string;
   phone: string;
+  assignedAgent: string;
   createdOn: string;
   contact: ContactRecord;
+};
+
+type AgentRecord = {
+  id: string;
+  name?: string;
+  email?: string;
+  uid?: string;
+  createdAt?: string;
 };
 
 const COMPANY_ID = process.env.NEXT_PUBLIC_FIREBASE_COMPANY_ID;
@@ -189,12 +198,16 @@ export default function ContactsPage() {
   const [customFieldsError, setCustomFieldsError] = useState<string | null>(
     null
   );
+  const [agents, setAgents] = useState<AgentRecord[]>([]);
+  const [agentsLoaded, setAgentsLoaded] = useState(false);
+  const [agentsError, setAgentsError] = useState<string | null>(null);
   const [openContactActionsId, setOpenContactActionsId] = useState<string | null>(
     null
   );
   const [deletingContactId, setDeletingContactId] = useState<string | null>(
     null
   );
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     if (!openContactActionsId) {
@@ -226,48 +239,48 @@ export default function ContactsPage() {
     };
   }, [openContactActionsId]);
 
-  useEffect(() => {
-    async function fetchContacts() {
-      setLoading(true);
-      setError(null);
+  const fetchContacts = useCallback(async () => {
+    setLoading(true);
+    setError(null);
 
-      if (!COMPANY_ID) {
-        setError("Company configuration is missing.");
-        setContacts([]);
-        setLoading(false);
-        return;
-      }
-
-      try {
-        const response = await fetch(
-          `/api/contacts?companyId=${encodeURIComponent(COMPANY_ID)}`
-        );
-
-        if (!response.ok) {
-          throw new Error(`Request failed with status ${response.status}`);
-        }
-
-        const data = (await response.json()) as {
-          contacts?: ContactRecord[];
-        };
-
-        const records = Array.isArray(data.contacts) ? data.contacts : [];
-
-        records.sort(
-          (a, b) => timestampToMillis(b.createdOn) - timestampToMillis(a.createdOn)
-        );
-
-        setContacts(records);
-      } catch (err) {
-        console.error("Failed to load contacts", err);
-        setError("We couldn't load your contacts. Try again in a moment.");
-      } finally {
-        setLoading(false);
-      }
+    if (!COMPANY_ID) {
+      setError("Company configuration is missing.");
+      setContacts([]);
+      setLoading(false);
+      return;
     }
 
-    fetchContacts();
+    try {
+      const response = await fetch(
+        `/api/contacts?companyId=${encodeURIComponent(COMPANY_ID)}`
+      );
+
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as {
+        contacts?: ContactRecord[];
+      };
+
+      const records = Array.isArray(data.contacts) ? data.contacts : [];
+
+      records.sort(
+        (a, b) => timestampToMillis(b.createdOn) - timestampToMillis(a.createdOn)
+      );
+
+      setContacts(records);
+    } catch (err) {
+      console.error("Failed to load contacts", err);
+      setError("We couldn't load your contacts. Try again in a moment.");
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void fetchContacts();
+  }, [fetchContacts]);
 
   const loadCustomFields = useCallback(async () => {
     if (!COMPANY_ID) {
@@ -319,6 +332,44 @@ export default function ContactsPage() {
     void loadCustomFields();
   }, [loadCustomFields]);
 
+  const loadAgents = useCallback(async () => {
+    if (!COMPANY_ID) {
+      setAgents([]);
+      setAgentsError(null);
+      setAgentsLoaded(true);
+      return;
+    }
+
+    setAgentsLoaded(false);
+
+    try {
+      const response = await fetch(
+        `/api/agents?companyId=${encodeURIComponent(COMPANY_ID)}`
+      );
+
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as {
+        agents?: AgentRecord[];
+      };
+
+      setAgents(Array.isArray(data.agents) ? data.agents : []);
+      setAgentsError(null);
+      setAgentsLoaded(true);
+    } catch (err) {
+      console.error("Failed to load agents", err);
+      setAgents([]);
+      setAgentsError("We couldn't load assigned agent names. Showing IDs instead.");
+      setAgentsLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAgents();
+  }, [loadAgents]);
+
   const displayColumnFields = useMemo(
     () =>
       customFields
@@ -327,6 +378,19 @@ export default function ContactsPage() {
     [customFields]
   );
 
+  const agentNameByUid = useMemo(() => {
+    const lookup = new Map<string, string>();
+    agents.forEach((agent) => {
+      const uid = agent.uid?.trim();
+      if (!uid) {
+        return;
+      }
+      const displayName = agent.name?.trim() || agent.email || uid;
+      lookup.set(uid, displayName);
+    });
+    return lookup;
+  }, [agents]);
+
   const rows: TableRow[] = useMemo(
     () =>
       contacts.map((contact) => {
@@ -334,18 +398,50 @@ export default function ContactsPage() {
         const lastName = (contact.lastName as string | undefined) ?? "";
         const displayName = [firstName, lastName].filter(Boolean).join(" ");
         const createdOn = formatTimestamp(contact.createdOn);
+        const contactAgentUid =
+          typeof contact.agentUid === "string" ? contact.agentUid.trim() : "";
+        const assignedAgent =
+          contactAgentUid.length > 0
+            ? agentNameByUid.get(contactAgentUid) ??
+              (agentsLoaded ? contactAgentUid : "-")
+            : "-";
 
         return {
           id: contact.id,
           name: displayName || "Unknown contact",
           email: (contact.email as string | undefined) ?? "-",
           phone: (contact.phone as string | undefined) ?? "-",
+          assignedAgent,
           createdOn,
           contact,
         };
       }),
-    [contacts]
+    [contacts, agentNameByUid, agentsLoaded]
   );
+
+  const filteredRows = useMemo(() => {
+    const trimmedQuery = searchQuery.trim();
+    if (!trimmedQuery) {
+      return rows;
+    }
+
+    const normalizedQuery = trimmedQuery.toLowerCase();
+    const normalizedPhoneQuery = trimmedQuery
+      .toLowerCase()
+      .replace(/[\s()+-]/g, "");
+
+    return rows.filter((row) => {
+      const email = row.email.toLowerCase();
+      const agent = row.assignedAgent.toLowerCase();
+      const phone = row.phone.toLowerCase().replace(/[\s()+-]/g, "");
+
+      return (
+        (email !== "-" && email.startsWith(normalizedQuery)) ||
+        (agent !== "-" && agent.startsWith(normalizedQuery)) ||
+        (phone && phone.startsWith(normalizedPhoneQuery))
+      );
+    });
+  }, [rows, searchQuery]);
 
   const handleViewCustomFields = (
     contact: ContactRecord,
@@ -437,6 +533,24 @@ export default function ContactsPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[240px] flex-1 sm:flex-none sm:w-auto">
+              <Search
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <label htmlFor="contact-search" className="sr-only">
+                Search contacts by phone, email, or agent
+              </label>
+              <input
+                id="contact-search"
+                name="contact-search"
+                type="text"
+                placeholder="Search phone, email, or agent..."
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                className="w-full rounded-lg border border-muted-foreground/40 bg-background pl-10 pr-3 py-2 text-sm text-foreground shadow-sm transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              />
+            </div>
             <button
               type="button"
               onClick={() => setIsCustomFieldsModalOpen(true)}
@@ -471,6 +585,11 @@ export default function ContactsPage() {
                 {customFieldsError}
               </div>
             ) : null}
+            {agentsError ? (
+              <div className="rounded-lg border border-muted-foreground/30 bg-muted/20 px-6 py-3 text-xs text-muted-foreground">
+                {agentsError}
+              </div>
+            ) : null}
             <div className="relative rounded-xl border bg-card shadow-sm">
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-border/70">
@@ -484,6 +603,7 @@ export default function ContactsPage() {
                         {field.label}
                       </th>
                     ))}
+                    <th className="px-6 py-3">Assigned Agent</th>
                     <th className="px-6 py-3">Custom Fields</th>
                     <th className="px-6 py-3">Created</th>
                     <th className="px-6 py-3 text-right">Actions</th>
@@ -508,6 +628,9 @@ export default function ContactsPage() {
                           </td>
                         ))}
                         <td className="px-6 py-4">
+                          <div className="h-4 w-32 rounded bg-muted/80" />
+                        </td>
+                        <td className="px-6 py-4">
                           <div className="h-4 w-28 rounded bg-muted/80" />
                         </td>
                         <td className="px-6 py-4">
@@ -518,17 +641,19 @@ export default function ContactsPage() {
                         </td>
                       </tr>
                     ))
-                  ) : rows.length === 0 ? (
+                  ) : filteredRows.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={6 + displayColumnFields.length}
+                        colSpan={7 + displayColumnFields.length}
                         className="px-6 py-16 text-center text-sm text-muted-foreground"
                       >
-                        No contacts found. Import a CSV to get started.
+                        {searchQuery.trim()
+                          ? "No contacts match your search."
+                          : "No contacts found. Import a CSV to get started."}
                       </td>
                     </tr>
                   ) : (
-                    rows.map((row) => (
+                    filteredRows.map((row) => (
                       <tr key={row.id} className="transition hover:bg-muted/60">
                         <td className="px-6 py-4 font-medium text-foreground">
                           {row.name}
@@ -547,6 +672,9 @@ export default function ContactsPage() {
                             {formatCustomFieldValue(row.contact, field.id)}
                           </td>
                         ))}
+                        <td className="px-6 py-4 text-muted-foreground">
+                          {row.assignedAgent}
+                        </td>
                         <td className="px-6 py-4">
                           <button
                             type="button"
@@ -638,6 +766,7 @@ export default function ContactsPage() {
       <ImportContactsModal
         open={isImportModalOpen}
         onClose={() => setIsImportModalOpen(false)}
+        onImportComplete={fetchContacts}
       />
     </>
   );
