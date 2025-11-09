@@ -24,6 +24,10 @@ import toast from "react-hot-toast";
 import { cn } from "@/lib/utils";
 import type { ParseResult } from "papaparse";
 import { FieldMapper } from "@/lib/mapping/fieldMapper";
+import {
+  detectAgentEmailColumn,
+  objectRowsToMatrix,
+} from "@/lib/mapping/agentEmailDetector";
 import type {
   ColumnMapping,
   ContactField as MappingContactField,
@@ -35,6 +39,15 @@ type ContactFieldWithMeta = MappingContactField & {
 };
 
 type RawContactField = Partial<ContactFieldWithMeta>;
+
+type ImportSummary = {
+  imported: number;
+  merged: number;
+  errors: number;
+  totalRows: number;
+  agentColumn?: string;
+  errorReasons: string[];
+};
 
 const VALID_FIELD_TYPES: ContactFieldType[] = [
   "text",
@@ -111,23 +124,29 @@ export function ImportContactsModal({
   >([]);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvSampleRows, setCsvSampleRows] = useState<string[][]>([]);
-  const [mappingStage, setMappingStage] = useState<"summary" | "detailed">(
-    "summary"
-  );
+  const [mappingStage, setMappingStage] = useState<
+    "summary" | "detailed" | "finalChecks"
+  >("summary");
   const [editingState, setEditingState] = useState<{
     csvIndex: number;
     draftFieldId: string | null;
   } | null>(null);
-  const [openFieldPickerIndex, setOpenFieldPickerIndex] = useState<number | null>(
-    null
-  );
+  const [openFieldPickerIndex, setOpenFieldPickerIndex] = useState<
+    number | null
+  >(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [mappingError, setMappingError] = useState<string | null>(null);
   const [fieldsLoading, setFieldsLoading] = useState(false);
   const [fieldsError, setFieldsError] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importSummary, setImportSummary] = useState<ImportSummary | null>(
+    null
+  );
+  const [importError, setImportError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sampleRowsRef = useRef<string[][]>([]);
   const headersRef = useRef<string[]>([]);
+  const parsedRowsRef = useRef<Record<string, string>[]>([]);
   const fieldPickerContainerRef = useRef<HTMLDivElement | null>(null);
 
   const COMPANY_ID = process.env.NEXT_PUBLIC_FIREBASE_COMPANY_ID;
@@ -145,8 +164,12 @@ export function ImportContactsModal({
     setEditingState(null);
     setIsAnalyzing(false);
     setMappingError(null);
+    setIsImporting(false);
+    setImportSummary(null);
+    setImportError(null);
     sampleRowsRef.current = [];
     headersRef.current = [];
+    parsedRowsRef.current = [];
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -274,14 +297,19 @@ export function ImportContactsModal({
       setEditingState(null);
       setIsAnalyzing(false);
       setMappingError(null);
+       setIsImporting(false);
+       setImportSummary(null);
+       setImportError(null);
       sampleRowsRef.current = [];
       headersRef.current = [];
+      parsedRowsRef.current = [];
       return;
     }
 
     let isCancelled = false;
     sampleRowsRef.current = [];
     headersRef.current = [];
+    parsedRowsRef.current = [];
 
     async function parseSelectedFile() {
       setParsingState("parsing");
@@ -335,20 +363,30 @@ export function ImportContactsModal({
                     headersRef.current.push(normalizedHeader);
                   }
 
-                  const valueString =
-                    value === null || value === undefined
-                      ? ""
-                      : typeof value === "string"
-                      ? value.trim()
-                      : String(value).trim();
+                const valueString =
+                  value === null || value === undefined
+                    ? ""
+                    : typeof value === "string"
+                    ? value.trim()
+                    : String(value).trim();
 
-                  rowValues[normalizedHeader] = valueString;
-                }
+                rowValues[normalizedHeader] = valueString;
+              }
 
-                if (sampleRowsRef.current.length < 100) {
-                  const headerOrder = headersRef.current.length
-                    ? headersRef.current
-                    : Object.keys(rowValues);
+              const hasAnyValue = Object.values(rowValues).some(
+                (value) => value.length > 0
+              );
+
+              if (!hasAnyValue) {
+                continue;
+              }
+
+              parsedRowsRef.current.push(rowValues);
+
+              if (sampleRowsRef.current.length < 100) {
+                const headerOrder = headersRef.current.length
+                  ? headersRef.current
+                  : Object.keys(rowValues);
                   const orderedHeaders = Array.from(
                     new Set(
                       headerOrder
@@ -447,6 +485,10 @@ export function ImportContactsModal({
           setMappingError("Field mapping analysis failed");
           sampleRowsRef.current = [];
           headersRef.current = [];
+          parsedRowsRef.current = [];
+          setIsImporting(false);
+          setImportSummary(null);
+          setImportError(null);
           if (fileInputRef.current) {
             fileInputRef.current.value = "";
           }
@@ -497,6 +539,13 @@ export function ImportContactsModal({
     return { coreFields: coreList, crmFields: crmList };
   }, [contactFields]);
 
+  const agentEmailCandidate = useMemo(() => {
+    if (!csvHeaders.length || !csvSampleRows.length) {
+      return null;
+    }
+    return detectAgentEmailColumn(csvHeaders, csvSampleRows);
+  }, [csvHeaders, csvSampleRows]);
+
   useEffect(() => {
     if (!open || parsingState !== "parsed") {
       return;
@@ -522,15 +571,16 @@ export function ImportContactsModal({
       const mapper = new FieldMapper(mappingFieldDefinitions);
       const sampleData = csvSampleRows.slice(0, 100);
       const mappings = mapper.mapColumns(csvHeaders, sampleData);
+      const resolvedMappings = resolveDuplicateSuggestions(mappings);
       if (!isCancelled) {
-        const initialMappings = deepCloneMappings(mappings);
+        const initialMappings = deepCloneMappings(resolvedMappings);
         setInitialColumnMappings(initialMappings);
         setColumnMappings((previous) => {
           if (!previous.length) {
-            return mappings;
+            return resolvedMappings;
           }
 
-          return mappings.map((mapping) => {
+          return resolvedMappings.map((mapping) => {
             const previousMapping = previous.find(
               (item) =>
                 item.csvColumn === mapping.csvColumn &&
@@ -746,7 +796,153 @@ export function ImportContactsModal({
     setEditingState(null);
   }, [initialColumnMappings]);
 
-  const handleNextClick = useCallback(() => {
+  const runImport = useCallback(async () => {
+    if (isImporting) {
+      return;
+    }
+
+    if (!COMPANY_ID) {
+      const message = "Missing company configuration.";
+      setImportError(message);
+      toast.error(message);
+      return;
+    }
+
+    if (!csvHeaders.length) {
+      const message = "No headers detected in this file.";
+      setImportError(message);
+      toast.error(message);
+      return;
+    }
+
+    if (!parsedRowsRef.current.length) {
+      const message = "No data rows detected in this file.";
+      setImportError(message);
+      toast.error(message);
+      return;
+    }
+
+    const mappedColumns = columnMappings
+      .filter((mapping) => Boolean(mapping.selectedField))
+      .map((mapping) => ({
+        csvColumn: mapping.csvColumn,
+        fieldId: mapping.selectedField as string,
+      }));
+
+    if (!mappedColumns.length) {
+      const message = "Map at least one CRM field before continuing.";
+      setImportError(message);
+      toast.error(message);
+      return;
+    }
+
+    const matrixSource =
+      parsedRowsRef.current.length > 0
+        ? objectRowsToMatrix(
+            csvHeaders,
+            parsedRowsRef.current.slice(0, 200)
+          )
+        : csvSampleRows;
+
+    let detectionResult =
+      detectAgentEmailColumn(csvHeaders, matrixSource) ?? null;
+
+    if (!detectionResult && agentEmailCandidate) {
+      detectionResult = agentEmailCandidate;
+    }
+
+    if (!detectionResult) {
+      const message =
+        "We couldn't detect any agent email column in this file.";
+      setImportError(message);
+      toast.error(message);
+      return;
+    }
+
+    setIsImporting(true);
+    setImportError(null);
+    setImportSummary(null);
+
+    try {
+      const response = await fetch(
+        `/api/contacts/import?companyId=${encodeURIComponent(
+          COMPANY_ID
+        )}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            headers: csvHeaders,
+            mappings: mappedColumns,
+            rows: parsedRowsRef.current,
+            agentColumn: detectionResult.header,
+          }),
+        }
+      );
+
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            imported?: number;
+            merged?: number;
+            errors?: number;
+            agentColumn?: string;
+            errorReasons?: unknown;
+            error?: string;
+            message?: string;
+          }
+        | null;
+
+      if (!response.ok || !payload) {
+        throw new Error(payload?.error ?? "Failed to import contacts");
+      }
+
+      const responseAgentColumn =
+        typeof payload.agentColumn === "string" &&
+        payload.agentColumn.trim().length
+          ? payload.agentColumn.trim()
+          : detectionResult.header;
+
+      setImportSummary({
+        imported: payload.imported ?? 0,
+        merged: payload.merged ?? 0,
+        errors: payload.errors ?? 0,
+        totalRows: parsedRowsRef.current.length,
+        agentColumn: responseAgentColumn,
+        errorReasons:
+          Array.isArray(payload.errorReasons) && payload.errorReasons.length
+            ? payload.errorReasons.filter(
+                (reason): reason is string =>
+                  typeof reason === "string" && reason.trim().length > 0
+              )
+            : [],
+      });
+      setMappingStage("finalChecks");
+      toast.success(
+        `Imported ${payload.imported ?? 0} contact${
+          (payload.imported ?? 0) === 1 ? "" : "s"
+        }`
+      );
+    } catch (error) {
+      console.error("Failed to import contacts", error);
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to import contacts";
+      setImportError(message);
+      toast.error(message);
+    } finally {
+      setIsImporting(false);
+    }
+  }, [
+    COMPANY_ID,
+    agentEmailCandidate,
+    columnMappings,
+    csvHeaders,
+    csvSampleRows,
+    isImporting,
+  ]);
+
+  const handleNextClick = useCallback(async () => {
     if (parsingState !== "parsed") {
       return;
     }
@@ -757,11 +953,25 @@ export function ImportContactsModal({
       return;
     }
 
-    // Placeholder for wizard progression - integrate with submission flow later.
-  }, [mappingStage, parsingState]);
+    if (mappingStage === "detailed") {
+      await runImport();
+      return;
+    }
+
+    if (mappingStage === "finalChecks") {
+      handleClose();
+    }
+  }, [handleClose, mappingStage, parsingState, runImport]);
 
   const handlePreviousClick = useCallback(() => {
     if (!file) {
+      return;
+    }
+
+    if (mappingStage === "finalChecks") {
+      setMappingStage("detailed");
+      setImportSummary(null);
+      setImportError(null);
       return;
     }
 
@@ -826,9 +1036,9 @@ export function ImportContactsModal({
                 Sample
               </span>
               {samplePreview.length ? (
-                samplePreview.map((sample) => (
+                samplePreview.map((sample, sampleIndex) => (
                   <span
-                    key={`${mapping.csvColumn}-summary-sample-${sample}`}
+                    key={`${mapping.csvColumn}-summary-sample-${sampleIndex}`}
                     className="rounded-sm bg-muted px-2 py-1 text-[11px]"
                   >
                     {sample}
@@ -926,9 +1136,6 @@ export function ImportContactsModal({
             <span className="truncate text-sm font-semibold tracking-tight">
               {field.label}
             </span>
-            <span className="text-xs text-muted-foreground">
-              {field.core ? "Core" : "CRM"} • {field.type}
-            </span>
           </div>
           <div className="flex flex-shrink-0 items-center gap-2">
             {isSelectedField ? (
@@ -978,9 +1185,9 @@ export function ImportContactsModal({
                 Sample
               </span>
               {samplePreview.length ? (
-                samplePreview.map((sample) => (
+                samplePreview.map((sample, sampleIndex) => (
                   <span
-                    key={`${mapping.csvColumn}-detailed-sample-${sample}`}
+                    key={`${mapping.csvColumn}-detailed-sample-${sampleIndex}`}
                     className="rounded-sm bg-muted px-1.5 py-1 text-[11px]"
                   >
                     {sample}
@@ -1046,30 +1253,20 @@ export function ImportContactsModal({
                 )}
               </div>
               {isEditing ? (
-                <div
-                  className="mt-4 space-y-3"
-                  ref={fieldPickerContainerRef}
-                >
+                <div className="mt-4 space-y-3" ref={fieldPickerContainerRef}>
                   <div className="relative">
                     <button
                       type="button"
                       onClick={toggleFieldPicker}
                       className={cn(
-                        "flex w-full items-center justify-between rounded-2xl border border-muted-foreground/30 bg-white px-4 py-3 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
+                        "flex w-50 items-center justify-between rounded-md border border-blue-300 bg-white px-2 py-1.5 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
                         isPickerOpen && "border-primary shadow-lg"
                       )}
                     >
-                      <span className="flex flex-col">
-                        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                          Selected field
-                        </span>
-                        <span className="text-base font-semibold text-foreground">
-                          {draftFieldLabel}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {draftFieldMeta}
-                        </span>
+                      <span className="text-xs  text-foreground">
+                        {draftFieldLabel}
                       </span>
+
                       <ChevronDown
                         className={cn(
                           "h-4 w-4 text-muted-foreground transition",
@@ -1079,14 +1276,14 @@ export function ImportContactsModal({
                       />
                     </button>
                     {isPickerOpen ? (
-                      <div className="absolute left-0 z-30 mt-2 w-full overflow-hidden rounded-2xl border border-muted-foreground/20 bg-white shadow-2xl">
-                        <div className="space-y-1 border-b border-muted-foreground/10 bg-muted/20 px-4 py-3">
+                      <div className="absolute left-0 z-30 mt-2 w-full overflow-hidden rounded-md border border-muted-foreground/20 bg-white shadow-2xl">
+                        <div className="space-y-1 border-b border-muted-foreground/10 bg-muted/20 px-2 py-3">
                           <button
                             type="button"
                             onClick={() => handleFieldSelection(null)}
-                            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-destructive transition hover:bg-destructive/5"
+                            className="flex w-full items-center gap-2   px-3   text-[11px] font-semibold text-gray-500 transition hover:text-gray-700"
                           >
-                            <Minus className="h-4 w-4" aria-hidden="true" />
+                            <Minus className="h-2.5 w-2.5" aria-hidden="true" />
                             Don&apos;t import this field
                           </button>
                           <button
@@ -1098,14 +1295,17 @@ export function ImportContactsModal({
                                 mapping.csvIndex
                               );
                             }}
-                            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-primary transition hover:bg-primary/5"
+                            className="flex w-full items-center gap-2   px-3    text-[11px] font-medium text-gray-500 transition hover:text-gray-700"
                           >
-                            <Sparkles className="h-4 w-4" aria-hidden="true" />
+                            <Sparkles
+                              className="h-2.5 w-2.5"
+                              aria-hidden="true"
+                            />
                             Create Custom Field
                           </button>
                         </div>
                         <div className="max-h-72 overflow-y-auto py-2">
-                          <div className="px-4 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          <div className="px-4 pb-1 text-[11px] font-semibold capitalize tracking-wide text-blue-500">
                             Core Fields
                           </div>
                           {coreFields.length ? (
@@ -1115,7 +1315,7 @@ export function ImportContactsModal({
                               No core fields available
                             </p>
                           )}
-                          <div className="px-4 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          <div className="px-4 pb-1 pt-3 text-[11px] border-t border-muted-foreground/10 font-semibold capitalize tracking-wide text-blue-500">
                             CRM Fields
                           </div>
                           {crmFields.length ? (
@@ -1188,21 +1388,49 @@ export function ImportContactsModal({
     (mapping) => mapping.isCustomField
   ).length;
   const isSummaryStage = mappingStage === "summary";
-  const currentStepLabel = isSummaryStage ? "Step 1 of 4" : "Step 2 of 4";
+  const isDetailedStage = mappingStage === "detailed";
+  const isFinalStage = mappingStage === "finalChecks";
+  const currentStepLabel = isFinalStage
+    ? "Step 3 of 4"
+    : isSummaryStage
+    ? "Step 1 of 4"
+    : "Step 2 of 4";
   const isParsing = parsingState === "parsing";
   const isParsed = parsingState === "parsed";
   const hasFile = Boolean(file);
-  const canProceed = isParsed;
-  const detectStatus: StepStatus = isParsed ? "complete" : "active";
-  const mapStatus: StepStatus = isParsed ? "active" : "upcoming";
-  const finalStatus: StepStatus = "upcoming";
+  const canProceed = isFinalStage
+    ? true
+    : isSummaryStage
+    ? isParsed
+    : isParsed && !isImporting;
+  const detectStatus: StepStatus =
+    parsingState === "parsed" ? "complete" : "active";
+  const mapStatus: StepStatus =
+    !hasFile || parsingState !== "parsed"
+      ? "upcoming"
+      : isFinalStage
+      ? "complete"
+      : "active";
+  const finalStatus: StepStatus = isFinalStage
+    ? "active"
+    : parsingState === "parsed" && hasFile
+    ? "upcoming"
+    : "upcoming";
   const progressPercent = Math.round(
     Math.max(0, Math.min(parseProgress, 1)) * 100
   );
-  const progressBarWidth = Math.min(
+  const baseProgressWidth = Math.min(
     Math.max(progressPercent, isParsing ? 6 : progressPercent),
     100
   );
+  const progressBarWidth = isFinalStage ? 100 : baseProgressWidth;
+  const nextButtonLabel = isFinalStage
+    ? "Move to Contacts"
+    : isDetailedStage
+    ? isImporting
+      ? "Running Final Checks..."
+      : "Run Final Checks"
+    : "Next";
 
   if (!open) return null;
 
@@ -1365,7 +1593,58 @@ export function ImportContactsModal({
                 </div>
               </div>
             </section>
-          ) : isParsed ? (
+        ) : isParsed ? (
+          mappingStage === "finalChecks" ? (
+            <section className="space-y-6">
+              <div className="rounded-2xl border border-muted-foreground/20 bg-white/95 px-6 py-10 text-center shadow-sm">
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-600">
+                  <Check className="h-7 w-7" aria-hidden="true" />
+                </div>
+                <p className="mt-6 text-xl font-semibold text-[#083F6D]">
+                  Final Checks Complete
+                </p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {importSummary
+                    ? `No blocking errors found across ${importSummary.totalRows.toLocaleString()} row${
+                        importSummary.totalRows === 1 ? "" : "s"
+                      }. Your contacts are ready to move to the CRM.`
+                    : "No blocking errors found. Your contacts are ready to move to the CRM."}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Contacts with unmatched agent emails were skipped automatically.
+                </p>
+                {importSummary ? (
+                  <div className="mt-8 grid gap-3 sm:grid-cols-3">
+                    <FinalSummaryCard
+                      label="Total Contacts Imported"
+                      tone="success"
+                      value={importSummary.imported}
+                    />
+                    <FinalSummaryCard
+                      label="Contacts Merged"
+                      tone="warning"
+                      value={importSummary.merged}
+                    />
+                    <FinalSummaryCard
+                      label="Errors"
+                      tone="error"
+                      value={importSummary.errors}
+                      tooltipItems={importSummary.errorReasons}
+                    />
+                  </div>
+                ) : null}
+              </div>
+              {importSummary?.agentColumn ? (
+                <div className="text-center text-xs text-muted-foreground">
+                  Matched agent ownership using column{" "}
+                  <span className="font-semibold text-foreground">
+                    {importSummary.agentColumn}
+                  </span>
+                  .
+                </div>
+              ) : null}
+            </section>
+          ) : (
             <section className="space-y-5">
               <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                 <div className="space-y-3">
@@ -1438,6 +1717,20 @@ export function ImportContactsModal({
                 </div>
               ) : null}
 
+              {agentEmailCandidate ? (
+                <div className="flex items-center gap-3 rounded-xl border border-emerald-300/60 bg-emerald-50 px-4 py-3 text-xs text-emerald-800">
+                  <Sparkles className="h-4 w-4 text-emerald-600" aria-hidden="true" />
+                  <div className="flex flex-col text-left">
+                    <span className="text-sm font-semibold text-emerald-700">
+                      Agent column detected: {agentEmailCandidate.header}
+                    </span>
+                    <span>
+                      Confidence ~{Math.round(agentEmailCandidate.score)}% — we&apos;ll assign agents automatically using this column.
+                    </span>
+                  </div>
+                </div>
+              ) : null}
+
               <div className="space-y-3">
                 {isAnalyzing ? (
                   <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-primary">
@@ -1455,6 +1748,22 @@ export function ImportContactsModal({
                   </div>
                 ) : null}
 
+                {isImporting && mappingStage === "detailed" ? (
+                  <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-primary">
+                    <Loader2
+                      className="h-4 w-4 animate-spin"
+                      aria-hidden="true"
+                    />
+                    Running final checks...
+                  </div>
+                ) : null}
+
+                {importError && mappingStage === "detailed" ? (
+                  <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                    {importError}
+                  </div>
+                ) : null}
+
                 {columnMappings.length === 0 &&
                 !isAnalyzing &&
                 !mappingError ? (
@@ -1469,7 +1778,8 @@ export function ImportContactsModal({
                   : columnMappings.map(renderDetailedRow)}
               </div>
             </section>
-          ) : (
+          )
+        ) : (
             <section className="space-y-6">
               <div className="rounded-2xl border border-muted-foreground/20 bg-white/80 px-6 py-10 text-center  ">
                 <p className="text-sm font-medium text-foreground">
@@ -1503,7 +1813,7 @@ export function ImportContactsModal({
               type="button"
               onClick={handlePreviousClick}
               className="rounded-lg border px-4 py-2 font-medium transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={!hasFile}
+              disabled={!hasFile || isImporting}
             >
               Previous
             </button>
@@ -1513,7 +1823,10 @@ export function ImportContactsModal({
               className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
               disabled={!canProceed}
             >
-              Next
+              {isDetailedStage && isImporting ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              ) : null}
+              {nextButtonLabel}
             </button>
           </div>
         </footer>
@@ -1619,6 +1932,92 @@ function deepCloneMappings(mappings: ColumnMapping[]): ColumnMapping[] {
   return mappings.map(cloneMapping);
 }
 
+// Ensure only the highest scoring column keeps a primary suggestion per field.
+function resolveDuplicateSuggestions(
+  mappings: ColumnMapping[]
+): ColumnMapping[] {
+  const grouped = new Map<string, ColumnMapping[]>();
+
+  for (const mapping of mappings) {
+    const primaryMatch = mapping.suggestedMatches[0];
+    if (!primaryMatch) {
+      continue;
+    }
+    const group = grouped.get(primaryMatch.systemFieldId);
+    if (group) {
+      group.push(mapping);
+    } else {
+      grouped.set(primaryMatch.systemFieldId, [mapping]);
+    }
+  }
+
+  const duplicates = Array.from(grouped.entries()).filter(
+    ([, group]) => group.length > 1
+  );
+
+  if (!duplicates.length) {
+    return mappings;
+  }
+
+  const winnerByField = new Map<string, number>();
+  const loserIndices = new Set<number>();
+
+  for (const [fieldId, group] of duplicates) {
+    group.sort((a, b) => {
+      const scoreA = a.suggestedMatches[0]?.score ?? 0;
+      const scoreB = b.suggestedMatches[0]?.score ?? 0;
+      if (scoreA !== scoreB) {
+        return scoreB - scoreA;
+      }
+      return a.csvIndex - b.csvIndex;
+    });
+
+    winnerByField.set(fieldId, group[0].csvIndex);
+    for (const losingMapping of group.slice(1)) {
+      loserIndices.add(losingMapping.csvIndex);
+    }
+  }
+
+  if (!loserIndices.size) {
+    return mappings;
+  }
+
+  return mappings.map((mapping) => {
+    const primaryMatch = mapping.suggestedMatches[0];
+    if (!primaryMatch) {
+      return mapping;
+    }
+
+    const winnerIndex = winnerByField.get(primaryMatch.systemFieldId);
+    if (winnerIndex === undefined) {
+      return mapping;
+    }
+
+    if (mapping.csvIndex === winnerIndex) {
+      if (
+        primaryMatch.confidence === "high" &&
+        mapping.selectedField !== primaryMatch.systemFieldId
+      ) {
+        return {
+          ...mapping,
+          selectedField: primaryMatch.systemFieldId,
+        };
+      }
+      return mapping;
+    }
+
+    return {
+      ...mapping,
+      selectedField:
+        mapping.selectedField === primaryMatch.systemFieldId
+          ? null
+          : mapping.selectedField,
+      suggestedMatches: [],
+      isCustomField: false,
+    };
+  });
+}
+
 type SummaryPillProps = {
   tone: "success" | "info" | "custom";
   caption: string;
@@ -1646,6 +2045,59 @@ function SummaryPill({ tone, caption }: SummaryPillProps) {
     >
       <Icon className="h-3.5 w-3.5" aria-hidden="true" />
       {caption}
+    </div>
+  );
+}
+
+type FinalSummaryCardProps = {
+  label: string;
+  value: number;
+  tone: "success" | "warning" | "error";
+  tooltipItems?: string[];
+};
+
+function FinalSummaryCard({
+  label,
+  value,
+  tone,
+  tooltipItems = [],
+}: FinalSummaryCardProps) {
+  const toneClasses: Record<FinalSummaryCardProps["tone"], string> = {
+    success: "border-emerald-100 bg-emerald-50 text-emerald-700",
+    warning: "border-amber-100 bg-amber-50 text-amber-700",
+    error: "border-rose-100 bg-rose-50 text-rose-700",
+  };
+
+  return (
+    <div
+      className={cn(
+        "rounded-2xl border px-4 py-5 text-center shadow-sm",
+        toneClasses[tone]
+      )}
+    >
+      <div className="flex items-center justify-center gap-2 text-xs font-semibold uppercase tracking-wide text-current">
+        <span>{label}</span>
+        {tone === "error" && tooltipItems.length ? (
+          <span className="group relative inline-flex text-rose-600">
+            <span className="inline-flex h-4 w-4 cursor-default items-center justify-center rounded-full border border-current text-[10px] font-bold leading-none">
+              i
+            </span>
+            <div className="pointer-events-none absolute top-full left-1/2 z-10 mt-2 w-48 -translate-x-1/2 rounded-lg border border-slate-200 bg-white p-3 text-left text-[11px] font-medium text-slate-600 opacity-0 shadow-lg transition group-hover:opacity-100">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                Errors detected
+              </p>
+              <ul className="list-disc space-y-1 pl-4">
+                {tooltipItems.map((item, index) => (
+                  <li key={`${label}-tooltip-${index}`}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          </span>
+        ) : null}
+      </div>
+      <p className="mt-2 text-3xl font-bold leading-tight">
+        {value.toLocaleString()}
+      </p>
     </div>
   );
 }
