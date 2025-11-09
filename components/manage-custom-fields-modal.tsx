@@ -58,15 +58,13 @@ function createFieldId(label: string) {
     .join("");
 }
 
-function mapToCustomField(
-  field: {
-    id: string;
-    label?: string;
-    type?: CustomFieldType;
-    core?: unknown;
-    showAsColumn?: unknown;
-  }
-): CustomField {
+function mapToCustomField(field: {
+  id: string;
+  label?: string;
+  type?: CustomFieldType;
+  core?: unknown;
+  showAsColumn?: unknown;
+}): CustomField {
   return {
     id: field.id,
     label: field.label ?? field.id,
@@ -149,9 +147,7 @@ export function ManageCustomFieldsModal({
       } catch (err) {
         console.error("Failed to load custom contact fields", err);
         if (!isMounted) return;
-        setError(
-          "We couldn't load your custom fields. Try again in a moment."
-        );
+        setError("We couldn't load your custom fields. Try again in a moment.");
       } finally {
         if (isMounted) {
           setLoading(false);
@@ -400,7 +396,7 @@ export function ManageCustomFieldsModal({
           </div>
           <button
             type="button"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full border text-muted-foreground transition hover:bg-muted"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border text-muted-foreground transition hover:bg-muted"
             onClick={handleClose}
             aria-label="Close custom fields modal"
           >
@@ -496,7 +492,10 @@ export function ManageCustomFieldsModal({
                               onClick={() => handleStartEdit(field)}
                               className="inline-flex items-center gap-1 rounded-lg border border-muted-foreground/20 px-3 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-muted"
                             >
-                              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                              <Pencil
+                                className="h-3.5 w-3.5"
+                                aria-hidden="true"
+                              />
                               Edit
                             </button>
                             <button
@@ -508,7 +507,10 @@ export function ManageCustomFieldsModal({
                               {deletingId === field.id ? (
                                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                               ) : (
-                                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                                <Trash2
+                                  className="h-3.5 w-3.5"
+                                  aria-hidden="true"
+                                />
                               )}
                               Delete
                             </button>

@@ -17,6 +17,7 @@ type ImportRequestPayload = {
   mappings?: unknown;
   rows?: unknown;
   agentColumn?: unknown;
+  commit?: unknown;
 };
 
 type NormalizedMapping = {
@@ -167,6 +168,7 @@ export async function POST(request: Request) {
     );
   }
 
+  const commit = Boolean(payload?.commit);
   const headers = normalizeHeaders(payload?.headers);
   const mappings = normalizeMappings(payload?.mappings);
 
@@ -265,7 +267,7 @@ export async function POST(request: Request) {
     let merged = 0;
     let skipped = 0;
     const errorReasons = new Set<string>();
-    let batch = adminDb.batch();
+    let batch = commit ? adminDb.batch() : null;
     let operationsInBatch = 0;
     const batches: Promise<unknown>[] = [];
 
@@ -329,7 +331,9 @@ export async function POST(request: Request) {
         if (normalizedPhone) {
           updateDoc.phoneSearch = normalizedPhone;
         }
-        batch.update(existingContact.ref, updateDoc);
+        if (commit && batch) {
+          batch.update(existingContact.ref, updateDoc);
+        }
         merged += 1;
       } else {
         const contactDoc: Record<string, unknown> = {
@@ -343,25 +347,31 @@ export async function POST(request: Request) {
         if (normalizedPhone) {
           contactDoc.phoneSearch = normalizedPhone;
         }
-        const docRef = contactsCollection.doc();
-        batch.set(docRef, contactDoc);
+        if (commit && batch) {
+          const docRef = contactsCollection.doc();
+          batch.set(docRef, contactDoc);
+        }
         imported += 1;
       }
 
-      operationsInBatch += 1;
+      if (commit && batch) {
+        operationsInBatch += 1;
 
-      if (operationsInBatch >= BATCH_LIMIT) {
-        batches.push(batch.commit());
-        batch = adminDb.batch();
-        operationsInBatch = 0;
+        if (operationsInBatch >= BATCH_LIMIT) {
+          batches.push(batch.commit());
+          batch = adminDb.batch();
+          operationsInBatch = 0;
+        }
       }
     }
 
-    if (operationsInBatch > 0) {
+    if (commit && batch && operationsInBatch > 0) {
       batches.push(batch.commit());
     }
 
-    await Promise.all(batches);
+    if (commit && batches.length) {
+      await Promise.all(batches);
+    }
 
     return NextResponse.json({
       imported,
@@ -369,6 +379,7 @@ export async function POST(request: Request) {
       errors: skipped,
       agentColumn: detectedAgentColumn,
       errorReasons: Array.from(errorReasons),
+      committed: commit,
     });
   } catch (error) {
     console.error("Failed to import contacts", error);

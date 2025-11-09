@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertCircle,
   ChevronDown,
   Check,
+  CornerDownRight,
   Link2,
   Loader2,
   Minus,
@@ -103,12 +105,16 @@ type StepStatus = "complete" | "active" | "upcoming";
 type ImportContactsModalProps = {
   open: boolean;
   onClose: () => void;
+  onImportComplete?: () => Promise<void> | void;
 };
 
 export function ImportContactsModal({
   open,
   onClose,
+  onImportComplete,
 }: ImportContactsModalProps) {
+  const router = useRouter();
+  const COMPANY_ID = process.env.NEXT_PUBLIC_FIREBASE_COMPANY_ID;
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [parsingState, setParsingState] = useState<
@@ -124,6 +130,12 @@ export function ImportContactsModal({
   >([]);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvSampleRows, setCsvSampleRows] = useState<string[][]>([]);
+  const agentEmailCandidate = useMemo(() => {
+    if (!csvHeaders.length || !csvSampleRows.length) {
+      return null;
+    }
+    return detectAgentEmailColumn(csvHeaders, csvSampleRows);
+  }, [csvHeaders, csvSampleRows]);
   const [mappingStage, setMappingStage] = useState<
     "summary" | "detailed" | "finalChecks"
   >("summary");
@@ -139,17 +151,17 @@ export function ImportContactsModal({
   const [fieldsLoading, setFieldsLoading] = useState(false);
   const [fieldsError, setFieldsError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [isSubmittingImport, setIsSubmittingImport] = useState(false);
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(
     null
   );
   const [importError, setImportError] = useState<string | null>(null);
+  const [finalChecksProgress, setFinalChecksProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sampleRowsRef = useRef<string[][]>([]);
   const headersRef = useRef<string[]>([]);
   const parsedRowsRef = useRef<Record<string, string>[]>([]);
   const fieldPickerContainerRef = useRef<HTMLDivElement | null>(null);
-
-  const COMPANY_ID = process.env.NEXT_PUBLIC_FIREBASE_COMPANY_ID;
 
   const reset = useCallback(() => {
     setFile(null);
@@ -165,8 +177,10 @@ export function ImportContactsModal({
     setIsAnalyzing(false);
     setMappingError(null);
     setIsImporting(false);
+    setIsSubmittingImport(false);
     setImportSummary(null);
     setImportError(null);
+    setFinalChecksProgress(0);
     sampleRowsRef.current = [];
     headersRef.current = [];
     parsedRowsRef.current = [];
@@ -179,7 +193,208 @@ export function ImportContactsModal({
     reset();
     onClose();
   }, [onClose, reset]);
+  const submitImportRequest = useCallback(
+    async (commit: boolean): Promise<ImportSummary> => {
+      if (!COMPANY_ID) {
+        throw new Error("Missing company configuration.");
+      }
 
+      if (!csvHeaders.length) {
+        throw new Error("No headers detected in this file.");
+      }
+
+      if (!parsedRowsRef.current.length) {
+        throw new Error("No data rows detected in this file.");
+      }
+
+      const mappedColumns = columnMappings
+        .filter((mapping) => Boolean(mapping.selectedField))
+        .map((mapping) => ({
+          csvColumn: mapping.csvColumn,
+          fieldId: mapping.selectedField as string,
+        }));
+
+      if (!mappedColumns.length) {
+        throw new Error("Map at least one CRM field before continuing.");
+      }
+
+      const matrixSource =
+        parsedRowsRef.current.length > 0
+          ? objectRowsToMatrix(csvHeaders, parsedRowsRef.current.slice(0, 200))
+          : csvSampleRows;
+
+      let detectionResult =
+        detectAgentEmailColumn(csvHeaders, matrixSource) ?? null;
+
+      if (!detectionResult && agentEmailCandidate) {
+        detectionResult = agentEmailCandidate;
+      }
+
+      if (!detectionResult) {
+        throw new Error(
+          "We couldn't detect any agent email column in this file."
+        );
+      }
+
+      const response = await fetch(
+        `/api/contacts/import?companyId=${encodeURIComponent(COMPANY_ID)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            headers: csvHeaders,
+            mappings: mappedColumns,
+            rows: parsedRowsRef.current,
+            agentColumn: detectionResult.header,
+            commit,
+          }),
+        }
+      );
+
+      const payload = (await response.json().catch(() => null)) as {
+        imported?: number;
+        merged?: number;
+        errors?: number;
+        agentColumn?: string;
+        errorReasons?: unknown;
+        error?: string;
+        message?: string;
+      } | null;
+
+      if (!response.ok || !payload) {
+        throw new Error(payload?.error ?? "Failed to import contacts");
+      }
+
+      const responseAgentColumn =
+        typeof payload.agentColumn === "string" &&
+        payload.agentColumn.trim().length
+          ? payload.agentColumn.trim()
+          : detectionResult.header;
+
+      return {
+        imported: payload.imported ?? 0,
+        merged: payload.merged ?? 0,
+        errors: payload.errors ?? 0,
+        totalRows: parsedRowsRef.current.length,
+        agentColumn: responseAgentColumn,
+        errorReasons:
+          Array.isArray(payload.errorReasons) && payload.errorReasons.length
+            ? payload.errorReasons.filter(
+                (reason): reason is string =>
+                  typeof reason === "string" && reason.trim().length > 0
+              )
+            : [],
+      };
+    },
+    [COMPANY_ID, agentEmailCandidate, columnMappings, csvHeaders, csvSampleRows]
+  );
+
+  const runFinalChecks = useCallback(async () => {
+    if (isImporting) {
+      return;
+    }
+
+    setFinalChecksProgress(0);
+    setIsImporting(true);
+    setImportError(null);
+    setImportSummary(null);
+
+    try {
+      const summary = await submitImportRequest(false);
+      setImportSummary(summary);
+      setFinalChecksProgress(100);
+      setMappingStage("finalChecks");
+      toast.success(
+        `Final checks complete. ${summary.imported.toLocaleString()} contact${
+          summary.imported === 1 ? "" : "s"
+        } ready to import.`
+      );
+    } catch (error) {
+      console.error("Failed to run final checks", error);
+      const message =
+        error instanceof Error ? error.message : "Failed to run final checks";
+      setImportError(message);
+      toast.error(message);
+    } finally {
+      setIsImporting(false);
+    }
+  }, [isImporting, submitImportRequest]);
+
+  const handleMoveToContacts = useCallback(async () => {
+    if (isSubmittingImport) {
+      return;
+    }
+
+    if (!importSummary) {
+      toast.error("Run final checks before importing contacts.");
+      return;
+    }
+
+    setIsSubmittingImport(true);
+    setImportError(null);
+
+    try {
+      const summary = await submitImportRequest(true);
+      setImportSummary(summary);
+      toast.success(
+        `Imported ${summary.imported.toLocaleString()} contact${
+          summary.imported === 1 ? "" : "s"
+        }`
+      );
+      if (onImportComplete) {
+        try {
+          await onImportComplete();
+        } catch (refreshError) {
+          console.error(
+            "Failed to refresh contacts after import",
+            refreshError
+          );
+        }
+      }
+      router.push("/contacts");
+      handleClose();
+    } catch (error) {
+      console.error("Failed to import contacts", error);
+      const message =
+        error instanceof Error ? error.message : "Failed to import contacts";
+      setImportError(message);
+      toast.error(message);
+    } finally {
+      setIsSubmittingImport(false);
+    }
+  }, [
+    handleClose,
+    importSummary,
+    isSubmittingImport,
+    onImportComplete,
+    router,
+    submitImportRequest,
+  ]);
+
+  useEffect(() => {
+    if (!isImporting) {
+      setFinalChecksProgress(0);
+      return;
+    }
+
+    if (mappingStage !== "detailed") {
+      return;
+    }
+
+    setFinalChecksProgress((current) => (current > 0 ? current : 8));
+
+    const interval = window.setInterval(() => {
+      setFinalChecksProgress((current) => {
+        if (current >= 92) {
+          return current;
+        }
+        const delta = Math.random() * 6 + 2;
+        return Math.min(current + delta, 92);
+      });
+    }, 650);
+
+    return () => window.clearInterval(interval);
+  }, [isImporting, mappingStage]);
   useEffect(() => {
     if (!open) {
       return;
@@ -297,9 +512,10 @@ export function ImportContactsModal({
       setEditingState(null);
       setIsAnalyzing(false);
       setMappingError(null);
-       setIsImporting(false);
-       setImportSummary(null);
-       setImportError(null);
+      setIsImporting(false);
+      setIsSubmittingImport(false);
+      setImportSummary(null);
+      setImportError(null);
       sampleRowsRef.current = [];
       headersRef.current = [];
       parsedRowsRef.current = [];
@@ -363,30 +579,30 @@ export function ImportContactsModal({
                     headersRef.current.push(normalizedHeader);
                   }
 
-                const valueString =
-                  value === null || value === undefined
-                    ? ""
-                    : typeof value === "string"
-                    ? value.trim()
-                    : String(value).trim();
+                  const valueString =
+                    value === null || value === undefined
+                      ? ""
+                      : typeof value === "string"
+                      ? value.trim()
+                      : String(value).trim();
 
-                rowValues[normalizedHeader] = valueString;
-              }
+                  rowValues[normalizedHeader] = valueString;
+                }
 
-              const hasAnyValue = Object.values(rowValues).some(
-                (value) => value.length > 0
-              );
+                const hasAnyValue = Object.values(rowValues).some(
+                  (value) => value.length > 0
+                );
 
-              if (!hasAnyValue) {
-                continue;
-              }
+                if (!hasAnyValue) {
+                  continue;
+                }
 
-              parsedRowsRef.current.push(rowValues);
+                parsedRowsRef.current.push(rowValues);
 
-              if (sampleRowsRef.current.length < 100) {
-                const headerOrder = headersRef.current.length
-                  ? headersRef.current
-                  : Object.keys(rowValues);
+                if (sampleRowsRef.current.length < 100) {
+                  const headerOrder = headersRef.current.length
+                    ? headersRef.current
+                    : Object.keys(rowValues);
                   const orderedHeaders = Array.from(
                     new Set(
                       headerOrder
@@ -538,13 +754,6 @@ export function ImportContactsModal({
 
     return { coreFields: coreList, crmFields: crmList };
   }, [contactFields]);
-
-  const agentEmailCandidate = useMemo(() => {
-    if (!csvHeaders.length || !csvSampleRows.length) {
-      return null;
-    }
-    return detectAgentEmailColumn(csvHeaders, csvSampleRows);
-  }, [csvHeaders, csvSampleRows]);
 
   useEffect(() => {
     if (!open || parsingState !== "parsed") {
@@ -796,152 +1005,6 @@ export function ImportContactsModal({
     setEditingState(null);
   }, [initialColumnMappings]);
 
-  const runImport = useCallback(async () => {
-    if (isImporting) {
-      return;
-    }
-
-    if (!COMPANY_ID) {
-      const message = "Missing company configuration.";
-      setImportError(message);
-      toast.error(message);
-      return;
-    }
-
-    if (!csvHeaders.length) {
-      const message = "No headers detected in this file.";
-      setImportError(message);
-      toast.error(message);
-      return;
-    }
-
-    if (!parsedRowsRef.current.length) {
-      const message = "No data rows detected in this file.";
-      setImportError(message);
-      toast.error(message);
-      return;
-    }
-
-    const mappedColumns = columnMappings
-      .filter((mapping) => Boolean(mapping.selectedField))
-      .map((mapping) => ({
-        csvColumn: mapping.csvColumn,
-        fieldId: mapping.selectedField as string,
-      }));
-
-    if (!mappedColumns.length) {
-      const message = "Map at least one CRM field before continuing.";
-      setImportError(message);
-      toast.error(message);
-      return;
-    }
-
-    const matrixSource =
-      parsedRowsRef.current.length > 0
-        ? objectRowsToMatrix(
-            csvHeaders,
-            parsedRowsRef.current.slice(0, 200)
-          )
-        : csvSampleRows;
-
-    let detectionResult =
-      detectAgentEmailColumn(csvHeaders, matrixSource) ?? null;
-
-    if (!detectionResult && agentEmailCandidate) {
-      detectionResult = agentEmailCandidate;
-    }
-
-    if (!detectionResult) {
-      const message =
-        "We couldn't detect any agent email column in this file.";
-      setImportError(message);
-      toast.error(message);
-      return;
-    }
-
-    setIsImporting(true);
-    setImportError(null);
-    setImportSummary(null);
-
-    try {
-      const response = await fetch(
-        `/api/contacts/import?companyId=${encodeURIComponent(
-          COMPANY_ID
-        )}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            headers: csvHeaders,
-            mappings: mappedColumns,
-            rows: parsedRowsRef.current,
-            agentColumn: detectionResult.header,
-          }),
-        }
-      );
-
-      const payload = (await response.json().catch(() => null)) as
-        | {
-            imported?: number;
-            merged?: number;
-            errors?: number;
-            agentColumn?: string;
-            errorReasons?: unknown;
-            error?: string;
-            message?: string;
-          }
-        | null;
-
-      if (!response.ok || !payload) {
-        throw new Error(payload?.error ?? "Failed to import contacts");
-      }
-
-      const responseAgentColumn =
-        typeof payload.agentColumn === "string" &&
-        payload.agentColumn.trim().length
-          ? payload.agentColumn.trim()
-          : detectionResult.header;
-
-      setImportSummary({
-        imported: payload.imported ?? 0,
-        merged: payload.merged ?? 0,
-        errors: payload.errors ?? 0,
-        totalRows: parsedRowsRef.current.length,
-        agentColumn: responseAgentColumn,
-        errorReasons:
-          Array.isArray(payload.errorReasons) && payload.errorReasons.length
-            ? payload.errorReasons.filter(
-                (reason): reason is string =>
-                  typeof reason === "string" && reason.trim().length > 0
-              )
-            : [],
-      });
-      setMappingStage("finalChecks");
-      toast.success(
-        `Imported ${payload.imported ?? 0} contact${
-          (payload.imported ?? 0) === 1 ? "" : "s"
-        }`
-      );
-    } catch (error) {
-      console.error("Failed to import contacts", error);
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Failed to import contacts";
-      setImportError(message);
-      toast.error(message);
-    } finally {
-      setIsImporting(false);
-    }
-  }, [
-    COMPANY_ID,
-    agentEmailCandidate,
-    columnMappings,
-    csvHeaders,
-    csvSampleRows,
-    isImporting,
-  ]);
-
   const handleNextClick = useCallback(async () => {
     if (parsingState !== "parsed") {
       return;
@@ -954,16 +1017,20 @@ export function ImportContactsModal({
     }
 
     if (mappingStage === "detailed") {
-      await runImport();
+      await runFinalChecks();
       return;
     }
 
     if (mappingStage === "finalChecks") {
-      handleClose();
+      await handleMoveToContacts();
     }
-  }, [handleClose, mappingStage, parsingState, runImport]);
+  }, [handleMoveToContacts, mappingStage, parsingState, runFinalChecks]);
 
   const handlePreviousClick = useCallback(() => {
+    if (isImporting || isSubmittingImport) {
+      return;
+    }
+
     if (!file) {
       return;
     }
@@ -982,7 +1049,7 @@ export function ImportContactsModal({
     }
 
     reset();
-  }, [file, mappingStage, reset]);
+  }, [file, isImporting, isSubmittingImport, mappingStage, reset]);
 
   const renderSummaryRow = (mapping: ColumnMapping) => {
     const targetField = mapping.selectedField
@@ -1015,7 +1082,7 @@ export function ImportContactsModal({
         )}
       >
         <div className="flex  gap-4">
-          <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold camelcase tracking-wide text-muted-foreground">
             <span
               className={cn(
                 "inline-flex items-center gap-2 rounded-md ring-green-200 ring px-3 py-1 text-xs font-semibold",
@@ -1050,7 +1117,6 @@ export function ImportContactsModal({
                 </span>
               )}
             </div>
-            <p className="text-xs text-muted-foreground">{reason}</p>
           </div>
         </div>
       </div>
@@ -1139,12 +1205,12 @@ export function ImportContactsModal({
           </div>
           <div className="flex flex-shrink-0 items-center gap-2">
             {isSelectedField ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
+              <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold camelcase tracking-wide text-primary">
                 Current
                 <Check className="h-3 w-3" aria-hidden="true" />
               </span>
             ) : null}
-            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold camelcase tracking-wide text-muted-foreground">
               {field.id}
             </span>
           </div>
@@ -1164,7 +1230,7 @@ export function ImportContactsModal({
       >
         <div className="flex flex-col gap-6 md:flex-row md:items-stretch md:gap-8">
           <div className="flex-1 space-y-3">
-            <div className="flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase tracking-wide">
+            <div className="flex flex-wrap items-center gap-2 text-[10px] font-semibold camelcase tracking-wide">
               <span className="inline-flex items-center gap-2 rounded-sm bg-purple-500/10 px-1.5 py-1 text-purple-500 ring-purple-500/50 ring">
                 Database Field
               </span>
@@ -1209,7 +1275,7 @@ export function ImportContactsModal({
           <div className="w-full md:max-w-sm">
             <div className="rounded-2xl  px-4    ">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <span className="inline-flex items-center gap-1 rounded-sm bg-blue-200 ring ring-blue-300 text-blue-500 px-1.5 py-1 text-[10px] font-semibold uppercase tracking-wide  ">
+                <span className="inline-flex items-center gap-1 rounded-sm bg-blue-200 ring ring-blue-300 text-blue-500 px-1.5 py-1 text-[10px] font-semibold camelcase tracking-wide  ">
                   CRM Field
                 </span>
                 {isEditing ? (
@@ -1399,7 +1465,7 @@ export function ImportContactsModal({
   const isParsed = parsingState === "parsed";
   const hasFile = Boolean(file);
   const canProceed = isFinalStage
-    ? true
+    ? Boolean(importSummary) && !isSubmittingImport
     : isSummaryStage
     ? isParsed
     : isParsed && !isImporting;
@@ -1425,7 +1491,9 @@ export function ImportContactsModal({
   );
   const progressBarWidth = isFinalStage ? 100 : baseProgressWidth;
   const nextButtonLabel = isFinalStage
-    ? "Move to Contacts"
+    ? isSubmittingImport
+      ? "Moving..."
+      : "Move to Contacts"
     : isDetailedStage
     ? isImporting
       ? "Running Final Checks..."
@@ -1446,15 +1514,22 @@ export function ImportContactsModal({
         onClick={(event) => event.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b px-6 py-4">
-          <div>
-            <p className="text-sm font-semibold text-primary">
-              Move Entry to Contact Section
-            </p>
-            <p className="text-xs text-muted-foreground">{currentStepLabel}</p>
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+              <CornerDownRight className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-primary">
+                Move Entry to Contact Section
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {currentStepLabel}
+              </p>
+            </div>
           </div>
           <button
             type="button"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full border text-muted-foreground transition hover:bg-muted"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border text-muted-foreground transition hover:bg-muted"
             onClick={handleClose}
             aria-label="Minimize import modal"
           >
@@ -1528,7 +1603,7 @@ export function ImportContactsModal({
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-xs font-semibold uppercase tracking-wide text-primary-foreground shadow-sm transition hover:bg-primary/90"
+                  className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-xs font-semibold camelcase tracking-wide text-primary-foreground shadow-sm transition hover:bg-primary/90"
                 >
                   Browse files
                 </button>
@@ -1593,193 +1668,163 @@ export function ImportContactsModal({
                 </div>
               </div>
             </section>
-        ) : isParsed ? (
-          mappingStage === "finalChecks" ? (
-            <section className="space-y-6">
-              <div className="rounded-2xl border border-muted-foreground/20 bg-white/95 px-6 py-10 text-center shadow-sm">
-                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-600">
-                  <Check className="h-7 w-7" aria-hidden="true" />
-                </div>
-                <p className="mt-6 text-xl font-semibold text-[#083F6D]">
-                  Final Checks Complete
-                </p>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  {importSummary
-                    ? `No blocking errors found across ${importSummary.totalRows.toLocaleString()} row${
-                        importSummary.totalRows === 1 ? "" : "s"
-                      }. Your contacts are ready to move to the CRM.`
-                    : "No blocking errors found. Your contacts are ready to move to the CRM."}
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Contacts with unmatched agent emails were skipped automatically.
-                </p>
-                {importSummary ? (
-                  <div className="mt-8 grid gap-3 sm:grid-cols-3">
-                    <FinalSummaryCard
-                      label="Total Contacts Imported"
-                      tone="success"
-                      value={importSummary.imported}
-                    />
-                    <FinalSummaryCard
-                      label="Contacts Merged"
-                      tone="warning"
-                      value={importSummary.merged}
-                    />
-                    <FinalSummaryCard
-                      label="Errors"
-                      tone="error"
-                      value={importSummary.errors}
-                      tooltipItems={importSummary.errorReasons}
-                    />
+          ) : isParsed ? (
+            mappingStage === "finalChecks" ? (
+              <section className="space-y-6">
+                <div className="rounded-2xl   bg-white/95 px-6 py-10 text-center ">
+                  <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-600">
+                    <Check className="h-7 w-7" aria-hidden="true" />
                   </div>
-                ) : null}
-              </div>
-              {importSummary?.agentColumn ? (
-                <div className="text-center text-xs text-muted-foreground">
-                  Matched agent ownership using column{" "}
-                  <span className="font-semibold text-foreground">
-                    {importSummary.agentColumn}
-                  </span>
-                  .
-                </div>
-              ) : null}
-            </section>
-          ) : (
-            <section className="space-y-5">
-              <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                <div className="space-y-3">
-                  <h2 className="text-lg font-semibold text-foreground">
-                    {mappingStage === "summary"
-                      ? "Column Detection Results"
-                      : "Smart Field Mapping"}
-                  </h2>
-                  <p className="text-sm text-muted-foreground">
-                    {mappingStage === "summary"
-                      ? `Our intelligent mapping has mapped ${detectedCount} fields in this entry with the CRM Contact Fields`
-                      : 'Review and adjust the AI-powered field mappings below. Click "Edit" next to any mapping to change it. You can map to existing CRM fields or create custom fields with different data types.'}
+                  <p className="mt-6 text-xl font-semibold text-[#083F6D]">
+                    Final Checks Complete
                   </p>
-                </div>
-              </div>
-              {mappingStage === "detailed" ? (
-                <div className="flex w-full items-center justify-end gap-2 text-xs text-muted-foreground">
-                  <button
-                    type="button"
-                    onClick={handleResetAllMappings}
-                    className="inline-flex items-center gap-2 rounded-full   px-3  font-semibold camelcase tracking-wide transition hover:border-primary/50 hover:text-primary"
-                  >
-                    <RotateCw className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span className="leading-none">Reset to Default</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-2 rounded-full  px-3  font-semibold camelcase tracking-wide text-muted-foreground/70"
-                    disabled
-                  >
-                    <SlidersHorizontal
-                      className="h-3.5 w-3.5"
-                      aria-hidden="true"
-                    />
-                    <span className="leading-none">More Mapping Options</span>
-                  </button>
-                </div>
-              ) : null}
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    {importSummary
+                      ? `No blocking issues found across ${importSummary.totalRows.toLocaleString()} row${
+                          importSummary.totalRows === 1 ? "" : "s"
+                        }. This Database entres are good to move to contacts section.`
+                      : "No blocking errors found. This Database entres are good to move to contacts section."}
+                  </p>
 
-              {mappingStage === "summary" ? (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <SummaryPill
-                    tone="success"
-                    caption={`${detectedCount} Fields Detected`}
-                  />
-                  <SummaryPill
-                    tone="info"
-                    caption={`${highConfidenceCount} High Confidence`}
-                  />
-                  <SummaryPill
-                    tone="custom"
-                    caption={`${customFieldCount} Custom Fields`}
-                  />
+                  {importSummary ? (
+                    <div className="mt-8 grid gap-3 sm:grid-cols-3 border border-gray-200 bg-white/70 p-2 rounded-xl shadow-md">
+                      <FinalSummaryCard
+                        label="Total Contacts Imported"
+                        tone="success"
+                        value={importSummary.imported}
+                      />
+                      <FinalSummaryCard
+                        label="Contacts Merged"
+                        tone="warning"
+                        value={importSummary.merged}
+                      />
+                      <FinalSummaryCard
+                        label="Errors"
+                        tone="error"
+                        value={importSummary.errors}
+                        tooltipItems={importSummary.errorReasons}
+                      />
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
-
-              {fieldsLoading ? (
-                <div className="flex items-center gap-2 rounded-xl border border-muted-foreground/20 bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
-                  <Loader2
-                    className="h-4 w-4 animate-spin text-primary"
-                    aria-hidden="true"
-                  />
-                  Syncing CRM contact fields...
-                </div>
-              ) : null}
-
-              {fieldsError ? (
-                <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                  {fieldsError}
-                </div>
-              ) : null}
-
-              {agentEmailCandidate ? (
-                <div className="flex items-center gap-3 rounded-xl border border-emerald-300/60 bg-emerald-50 px-4 py-3 text-xs text-emerald-800">
-                  <Sparkles className="h-4 w-4 text-emerald-600" aria-hidden="true" />
-                  <div className="flex flex-col text-left">
-                    <span className="text-sm font-semibold text-emerald-700">
-                      Agent column detected: {agentEmailCandidate.header}
-                    </span>
-                    <span>
-                      Confidence ~{Math.round(agentEmailCandidate.score)}% — we&apos;ll assign agents automatically using this column.
-                    </span>
+              </section>
+            ) : isImporting && mappingStage === "detailed" ? (
+              <FinalChecksInProgress
+                fileName={file?.name ?? null}
+                progress={finalChecksProgress}
+              />
+            ) : (
+              <section className="space-y-5">
+                <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                  <div className="space-y-3">
+                    <h2 className="text-lg font-semibold text-foreground">
+                      {mappingStage === "summary"
+                        ? "Column Detection Results"
+                        : "Smart Field Mapping"}
+                    </h2>
+                    <p className="text-sm text-muted-foreground">
+                      {mappingStage === "summary"
+                        ? `Our intelligent mapping has mapped ${detectedCount} fields in this entry with the CRM Contact Fields`
+                        : 'Review and adjust the AI-powered field mappings below. Click "Edit" next to any mapping to change it. You can map to existing CRM fields or create custom fields with different data types.'}
+                    </p>
                   </div>
                 </div>
-              ) : null}
+                {mappingStage === "detailed" ? (
+                  <div className="flex w-full items-center justify-end gap-2 text-xs text-muted-foreground">
+                    <button
+                      type="button"
+                      onClick={handleResetAllMappings}
+                      className="inline-flex items-center gap-2 rounded-full   px-3  font-semibold camelcase tracking-wide transition hover:border-primary/50 hover:text-primary"
+                    >
+                      <RotateCw className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span className="leading-none">Reset to Default</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-2 rounded-full  px-3  font-semibold camelcase tracking-wide text-muted-foreground/70"
+                      disabled
+                    >
+                      <SlidersHorizontal
+                        className="h-3.5 w-3.5"
+                        aria-hidden="true"
+                      />
+                      <span className="leading-none">More Mapping Options</span>
+                    </button>
+                  </div>
+                ) : null}
 
-              <div className="space-y-3">
-                {isAnalyzing ? (
-                  <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-primary">
+                {mappingStage === "summary" ? (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <SummaryPill
+                      tone="success"
+                      caption={`${detectedCount} Fields Detected`}
+                    />
+                    <SummaryPill
+                      tone="info"
+                      caption={`${highConfidenceCount} High Confidence`}
+                    />
+                    <SummaryPill
+                      tone="custom"
+                      caption={`${customFieldCount} Custom Fields`}
+                    />
+                  </div>
+                ) : null}
+
+                {fieldsLoading ? (
+                  <div className="flex items-center gap-2 rounded-xl border border-muted-foreground/20 bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
                     <Loader2
-                      className="h-4 w-4 animate-spin"
+                      className="h-4 w-4 animate-spin text-primary"
                       aria-hidden="true"
                     />
-                    Analyzing field mappings...
+                    Syncing CRM contact fields...
                   </div>
                 ) : null}
 
-                {mappingError ? (
+                {fieldsError ? (
                   <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                    {mappingError}
+                    {fieldsError}
                   </div>
                 ) : null}
 
-                {isImporting && mappingStage === "detailed" ? (
-                  <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-primary">
-                    <Loader2
-                      className="h-4 w-4 animate-spin"
-                      aria-hidden="true"
-                    />
-                    Running final checks...
-                  </div>
-                ) : null}
+                <div className="space-y-3">
+                  {isAnalyzing ? (
+                    <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-primary">
+                      <Loader2
+                        className="h-4 w-4 animate-spin"
+                        aria-hidden="true"
+                      />
+                      Analyzing field mappings...
+                    </div>
+                  ) : null}
 
-                {importError && mappingStage === "detailed" ? (
-                  <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                    {importError}
-                  </div>
-                ) : null}
+                  {mappingError ? (
+                    <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                      {mappingError}
+                    </div>
+                  ) : null}
 
-                {columnMappings.length === 0 &&
-                !isAnalyzing &&
-                !mappingError ? (
-                  <div className="rounded-2xl border border-muted-foreground/20 bg-white/80 px-6 py-10 text-center text-sm text-muted-foreground  ">
-                    No columns detected in this file. Try uploading a different
-                    dataset.
-                  </div>
-                ) : null}
+                  {importError && mappingStage === "detailed" ? (
+                    <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                      {importError}
+                    </div>
+                  ) : null}
 
-                {mappingStage === "summary"
-                  ? columnMappings.map(renderSummaryRow)
-                  : columnMappings.map(renderDetailedRow)}
-              </div>
-            </section>
-          )
-        ) : (
+                  {columnMappings.length === 0 &&
+                  !isAnalyzing &&
+                  !mappingError ? (
+                    <div className="rounded-2xl border border-muted-foreground/20 bg-white/80 px-6 py-10 text-center text-sm text-muted-foreground  ">
+                      No columns detected in this file. Try uploading a
+                      different dataset.
+                    </div>
+                  ) : null}
+
+                  {mappingStage === "summary"
+                    ? columnMappings.map(renderSummaryRow)
+                    : columnMappings.map(renderDetailedRow)}
+                </div>
+              </section>
+            )
+          ) : (
             <section className="space-y-6">
               <div className="rounded-2xl border border-muted-foreground/20 bg-white/80 px-6 py-10 text-center  ">
                 <p className="text-sm font-medium text-foreground">
@@ -1813,7 +1858,7 @@ export function ImportContactsModal({
               type="button"
               onClick={handlePreviousClick}
               className="rounded-lg border px-4 py-2 font-medium transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={!hasFile || isImporting}
+              disabled={!hasFile || isImporting || isSubmittingImport}
             >
               Previous
             </button>
@@ -1823,9 +1868,10 @@ export function ImportContactsModal({
               className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
               disabled={!canProceed}
             >
-              {isDetailedStage && isImporting ? (
+              {((isDetailedStage && isImporting) ||
+                (isFinalStage && isSubmittingImport)) && (
                 <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-              ) : null}
+              )}
               {nextButtonLabel}
             </button>
           </div>
@@ -2039,13 +2085,98 @@ function SummaryPill({ tone, caption }: SummaryPillProps) {
   return (
     <div
       className={cn(
-        "flex w-full items-center justify-center gap-2 rounded-sm px-4 py-2 text-[11px] font-semibold uppercase tracking-wide ring",
+        "flex w-full items-center justify-center gap-2 rounded-sm px-4 py-2 text-[11px] font-semibold camelcase tracking-wide ring",
         toneClasses[tone]
       )}
     >
       <Icon className="h-3.5 w-3.5" aria-hidden="true" />
       {caption}
     </div>
+  );
+}
+
+type FinalChecksInProgressProps = {
+  fileName: string | null;
+  progress: number;
+};
+
+function FinalChecksInProgress({
+  fileName,
+  progress,
+}: FinalChecksInProgressProps) {
+  const displayProgress = Math.min(100, Math.max(0, Math.round(progress)));
+  const datasetLabel =
+    fileName && fileName.length ? fileName : "Pending dataset";
+  const checks: Array<{
+    label: string;
+    description: string;
+    icon: LucideIcon;
+  }> = [
+    {
+      label: "Duplicates",
+      description: "Matching names, emails, and phones with existing contacts.",
+      icon: Search,
+    },
+    {
+      label: "Data Quality",
+      description: "Validating required CRM fields and formatting issues.",
+      icon: Target,
+    },
+    {
+      label: "Custom Rules",
+      description: "Running workspace automations for edge-case cleanup.",
+      icon: Wrench,
+    },
+  ];
+
+  return (
+    <section className="space-y-6">
+      <div className="rounded-[32px]   bg-white/95 px-6 py-2 text-center  ">
+        <div className="mx-auto flex max-w-2xl flex-col items-center gap-8 text-center">
+          <div className="space-y-2 self-start text-left">
+            <p className="text-left text-lg font-semibold text-[#083F6D]">
+              Checking for Duplicates & Errors...
+            </p>
+            <p className="text-left text-sm text-muted-foreground">
+              Reviewing the entry data to ensure no duplicate contacts or
+              invalid data slip through before importing.
+            </p>
+          </div>
+          <div className="relative mx-auto flex h-32 w-32 items-center justify-center rounded-[28px] bg-gradient-to-b from-[#F6F9FF] to-[#E9F0FF] shadow-inner">
+            <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-[#083F6D] text-white shadow-lg ring-8 ring-[#E2EBFF]">
+              <Check className="h-9 w-9" aria-hidden="true" />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <p className="text-base font-semibold text-[#2A4372]">
+              Running Final Checks...
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Scanning entries for duplicates, missing details, or errors before
+              the move to the contact section completes.
+            </p>
+          </div>
+          <div className="w-full max-w-md space-y-3">
+            <div className="flex items-center justify-between text-xs font-semibold text-[#4D6FA8]">
+              <span>Progress</span>
+              <span>{displayProgress}%</span>
+            </div>
+            <div
+              className="h-2 rounded-full bg-slate-100"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={displayProgress}
+            >
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-[#A2C5FF] via-[#6B9BFF] to-[#1B64DA] transition-[width] duration-500 ease-out"
+                style={{ width: `${displayProgress}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -2075,7 +2206,7 @@ function FinalSummaryCard({
         toneClasses[tone]
       )}
     >
-      <div className="flex items-center justify-center gap-2 text-xs font-semibold uppercase tracking-wide text-current">
+      <div className="flex items-center justify-center gap-2 text-xs font-semibold capitalize tracking-wide text-current">
         <span>{label}</span>
         {tone === "error" && tooltipItems.length ? (
           <span className="group relative inline-flex text-rose-600">
@@ -2083,7 +2214,7 @@ function FinalSummaryCard({
               i
             </span>
             <div className="pointer-events-none absolute top-full left-1/2 z-10 mt-2 w-48 -translate-x-1/2 rounded-lg border border-slate-200 bg-white p-3 text-left text-[11px] font-medium text-slate-600 opacity-0 shadow-lg transition group-hover:opacity-100">
-              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+              <p className="mb-1 text-[10px] font-semibold capitalize tracking-wide text-slate-400">
                 Errors detected
               </p>
               <ul className="list-disc space-y-1 pl-4">

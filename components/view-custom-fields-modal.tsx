@@ -69,14 +69,14 @@ function timestampToDate(value: unknown): Date | null {
       typeof maybeTimestamp.seconds === "number"
         ? maybeTimestamp.seconds
         : typeof maybeTimestamp._seconds === "number"
-          ? maybeTimestamp._seconds
-          : undefined;
+        ? maybeTimestamp._seconds
+        : undefined;
     const nanoseconds =
       typeof maybeTimestamp.nanoseconds === "number"
         ? maybeTimestamp.nanoseconds
         : typeof maybeTimestamp._nanoseconds === "number"
-          ? maybeTimestamp._nanoseconds
-          : 0;
+        ? maybeTimestamp._nanoseconds
+        : 0;
 
     if (typeof seconds === "number") {
       return new Date(seconds * 1000 + nanoseconds / 1_000_000);
@@ -235,7 +235,7 @@ export function ViewCustomFieldsModal({
           </div>
           <button
             type="button"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full border text-muted-foreground transition hover:bg-muted"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border text-muted-foreground transition hover:bg-muted"
             onClick={onClose}
             aria-label="Close custom fields modal"
           >
