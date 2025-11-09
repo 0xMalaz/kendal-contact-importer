@@ -120,3 +120,82 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Global scrollbar styling with faded gray color */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(156, 163, 175, 0.3) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(156, 163, 175, 0.3);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(156, 163, 175, 0.5);
+}
+
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+
+*::-webkit-scrollbar-button:start:increment,
+*::-webkit-scrollbar-button:start:decrement,
+*::-webkit-scrollbar-button:end:increment,
+*::-webkit-scrollbar-button:end:decrement {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Slim, low-contrast scrollbar for the import contacts modal */
+.import-modal-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(65, 65, 65, 0.35) transparent;
+}
+
+.import-modal-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.import-modal-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.import-modal-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.3);
+  border-radius: 999px;
+}
+
+.import-modal-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.45);
+}
+
+.import-modal-scroll::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+
+.import-modal-scroll::-webkit-scrollbar-button:start:increment,
+.import-modal-scroll::-webkit-scrollbar-button:start:decrement,
+.import-modal-scroll::-webkit-scrollbar-button:end:increment,
+.import-modal-scroll::-webkit-scrollbar-button:end:decrement {
+  display: none;
+  width: 0;
+  height: 0;
+}

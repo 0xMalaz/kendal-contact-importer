@@ -3,17 +3,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
+  ChevronDown,
   Check,
   Link2,
   Loader2,
   Minus,
   Paperclip,
   Pencil,
-  RotateCcw,
+  RotateCw,
+  Search,
+  SlidersHorizontal,
   Sparkles,
+  Target,
   Upload,
+  Wrench,
   X,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import toast from "react-hot-toast";
 import { cn } from "@/lib/utils";
 import type { ParseResult } from "papaparse";
@@ -37,6 +43,8 @@ const VALID_FIELD_TYPES: ContactFieldType[] = [
   "email",
   "datetime",
 ];
+
+const CORE_FIELD_ORDER = ["firstName", "lastName", "phone", "email"];
 
 function normalizeFieldType(value: unknown): ContactFieldType | null {
   if (typeof value !== "string") {
@@ -84,23 +92,35 @@ type ImportContactsModalProps = {
   onClose: () => void;
 };
 
-export function ImportContactsModal({ open, onClose }: ImportContactsModalProps) {
+export function ImportContactsModal({
+  open,
+  onClose,
+}: ImportContactsModalProps) {
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [parsingState, setParsingState] = useState<
     "idle" | "parsing" | "parsed" | "error"
   >("idle");
   const [parseProgress, setParseProgress] = useState(0);
-  const [contactFields, setContactFields] = useState<ContactFieldWithMeta[]>([]);
+  const [contactFields, setContactFields] = useState<ContactFieldWithMeta[]>(
+    []
+  );
   const [columnMappings, setColumnMappings] = useState<ColumnMapping[]>([]);
-  const [initialColumnMappings, setInitialColumnMappings] = useState<ColumnMapping[]>([]);
+  const [initialColumnMappings, setInitialColumnMappings] = useState<
+    ColumnMapping[]
+  >([]);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvSampleRows, setCsvSampleRows] = useState<string[][]>([]);
-  const [mappingStage, setMappingStage] = useState<"summary" | "detailed">("summary");
+  const [mappingStage, setMappingStage] = useState<"summary" | "detailed">(
+    "summary"
+  );
   const [editingState, setEditingState] = useState<{
     csvIndex: number;
     draftFieldId: string | null;
   } | null>(null);
+  const [openFieldPickerIndex, setOpenFieldPickerIndex] = useState<number | null>(
+    null
+  );
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [mappingError, setMappingError] = useState<string | null>(null);
   const [fieldsLoading, setFieldsLoading] = useState(false);
@@ -108,6 +128,7 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sampleRowsRef = useRef<string[][]>([]);
   const headersRef = useRef<string[]>([]);
+  const fieldPickerContainerRef = useRef<HTMLDivElement | null>(null);
 
   const COMPANY_ID = process.env.NEXT_PUBLIC_FIREBASE_COMPANY_ID;
 
@@ -170,9 +191,8 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
         const normalized =
           payload.fields
             ?.map((field) => normalizeContactField(field))
-            .filter(
-              (field): field is ContactFieldWithMeta => Boolean(field)
-            ) ?? [];
+            .filter((field): field is ContactFieldWithMeta => Boolean(field)) ??
+          [];
 
         if (!isCancelled) {
           setContactFields(normalized);
@@ -197,6 +217,29 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
     };
   }, [COMPANY_ID, open]);
 
+  useEffect(() => {
+    if (!editingState) {
+      setOpenFieldPickerIndex(null);
+    }
+  }, [editingState]);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        openFieldPickerIndex !== null &&
+        fieldPickerContainerRef.current &&
+        !fieldPickerContainerRef.current.contains(event.target as Node)
+      ) {
+        setOpenFieldPickerIndex(null);
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [openFieldPickerIndex]);
+
   const handleFiles = useCallback((files: FileList | null) => {
     if (!files?.length) return false;
     const nextFile = files[0];
@@ -210,10 +253,7 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
       nextFile.name.toLowerCase().endsWith(".csv") ||
       nextFile.name.toLowerCase().endsWith(".xlsx");
 
-    if (
-      allowedTypes.includes(nextFile.type) ||
-      matchesExtension
-    ) {
+    if (allowedTypes.includes(nextFile.type) || matchesExtension) {
       setFile(nextFile);
       return true;
     }
@@ -248,7 +288,8 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
       setParseProgress(0);
       try {
         const PapaModule = await import("papaparse"); // dynamic import for smaller bundle size as we only need this during parsing
-        const Papa = (PapaModule.default ?? PapaModule) as typeof import("papaparse");
+        const Papa = (PapaModule.default ??
+          PapaModule) as typeof import("papaparse");
 
         await new Promise<void>((resolve, reject) => {
           Papa.parse(file, {
@@ -298,8 +339,8 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
                     value === null || value === undefined
                       ? ""
                       : typeof value === "string"
-                        ? value.trim()
-                        : String(value).trim();
+                      ? value.trim()
+                      : String(value).trim();
 
                   rowValues[normalizedHeader] = valueString;
                 }
@@ -328,7 +369,10 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
                   : null;
 
               if (cursor !== null && Number.isFinite(cursor) && file.size > 0) {
-                const nextProgress = Math.min(0.99, Math.max(0, cursor / file.size));
+                const nextProgress = Math.min(
+                  0.99,
+                  Math.max(0, cursor / file.size)
+                );
                 setParseProgress((previous) =>
                   nextProgress > previous ? nextProgress : previous
                 );
@@ -368,7 +412,10 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
               ).filter((header) => header.length > 0);
 
               const sampleRows = sampleRowsRef.current.slice(0, 100);
-              const fallbackMappings = buildFallbackMappings(uniqueHeaders, sampleRows);
+              const fallbackMappings = buildFallbackMappings(
+                uniqueHeaders,
+                sampleRows
+              );
 
               setParseProgress(1);
               setCsvHeaders(uniqueHeaders);
@@ -422,6 +469,32 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
       type,
       core,
     }));
+  }, [contactFields]);
+
+  const { coreFields, crmFields } = useMemo(() => {
+    const coreList = contactFields
+      .filter((field) => field.core)
+      .sort((fieldA, fieldB) => {
+        const indexA = CORE_FIELD_ORDER.indexOf(fieldA.id);
+        const indexB = CORE_FIELD_ORDER.indexOf(fieldB.id);
+
+        if (indexA === -1 && indexB === -1) {
+          return fieldA.label.localeCompare(fieldB.label);
+        }
+        if (indexA === -1) {
+          return 1;
+        }
+        if (indexB === -1) {
+          return -1;
+        }
+        return indexA - indexB;
+      });
+
+    const crmList = contactFields
+      .filter((field) => !field.core)
+      .sort((fieldA, fieldB) => fieldA.label.localeCompare(fieldB.label));
+
+    return { coreFields: coreList, crmFields: crmList };
   }, [contactFields]);
 
   useEffect(() => {
@@ -713,7 +786,8 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
     const displayMatch = selectedMatch ?? mapping.suggestedMatches[0];
     const score = displayMatch?.score ?? 0;
     const confidence = displayMatch?.confidence ?? "low";
-    const { badgeClass, label: confidenceLabel } = getConfidenceStyles(confidence);
+    const { badgeClass, label: confidenceLabel } =
+      getConfidenceStyles(confidence);
     const samplePreview = mapping.sampleData
       .filter((value) => value && value.length > 0)
       .slice(0, 3);
@@ -730,49 +804,44 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
           manualReview ? "border-amber-400/40" : "border-muted-foreground/20"
         )}
       >
-        <div className="flex flex-col gap-3">
+        <div className="flex  gap-4">
           <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             <span
               className={cn(
-                "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold",
+                "inline-flex items-center gap-2 rounded-md ring-green-200 ring px-3 py-1 text-xs font-semibold",
                 badgeClass
               )}
             >
               {`${score}% - ${confidenceLabel}`}
             </span>
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-foreground">
-            <span>{mapping.csvColumn}</span>
-            <Link2 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-            <span className="text-primary">{fieldLabel}</span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span className="font-semibold uppercase tracking-wide text-[11px]">
-              Sample
-            </span>
-            {samplePreview.length ? (
-              samplePreview.map((sample) => (
-                <span
-                  key={`${mapping.csvColumn}-summary-sample-${sample}`}
-                  className="rounded-full bg-muted px-2 py-1"
-                >
-                  {sample}
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-foreground">
+              <span>{mapping.csvColumn}</span>
+              <Link2 className="h-4 w-4 text-blue-500" aria-hidden="true" />
+              <span className="  text-blue-500">{fieldLabel}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span className="font-semibold camelcase tracking-wide text-[11px]">
+                Sample
+              </span>
+              {samplePreview.length ? (
+                samplePreview.map((sample) => (
+                  <span
+                    key={`${mapping.csvColumn}-summary-sample-${sample}`}
+                    className="rounded-sm bg-muted px-2 py-1 text-[11px]"
+                  >
+                    {sample}
+                  </span>
+                ))
+              ) : (
+                <span className="text-muted-foreground/70">
+                  No data detected
                 </span>
-              ))
-            ) : (
-              <span className="text-muted-foreground/70">No data detected</span>
-            )}
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">{reason}</p>
           </div>
-          <p className="text-xs text-muted-foreground">{reason}</p>
-          {mapping.isCustomField && !mapping.selectedField ? (
-            <button
-              type="button"
-              onClick={() => handleCreateCustomField(mapping.csvColumn, mapping.csvIndex)}
-              className="text-sm font-medium text-primary transition hover:underline"
-            >
-              + Create as custom field
-            </button>
-          ) : null}
         </div>
       </div>
     );
@@ -790,7 +859,8 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
     const displayMatch = selectedMatch ?? mapping.suggestedMatches[0];
     const score = displayMatch?.score ?? 0;
     const confidence = displayMatch?.confidence ?? "low";
-    const { badgeClass, label: confidenceLabel } = getConfidenceStyles(confidence);
+    const { badgeClass, label: confidenceLabel } =
+      getConfidenceStyles(confidence);
     const samplePreview = mapping.sampleData
       .filter((value) => value && value.length > 0)
       .slice(0, 3);
@@ -801,7 +871,9 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
     const displayFieldLabel = mapping.selectedField
       ? targetField?.label ?? "Unknown field"
       : displayMatch?.systemFieldLabel ?? "Not mapped";
-    const fieldMeta = mapping.selectedField ? formatFieldMeta(targetField) : "No field selected";
+    const fieldMeta = mapping.selectedField
+      ? formatFieldMeta(targetField)
+      : "No field selected";
     const manualReview =
       (displayMatch && displayMatch.confidence === "low") ||
       (!mapping.selectedField && !displayMatch);
@@ -809,170 +881,280 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
       ? selectedFieldCounts.get(mapping.selectedField) ?? 0
       : 0;
     const hasDuplicate = duplicateCount > 1;
+    const draftField =
+      draftFieldId && contactFields.length
+        ? contactFields.find((field) => field.id === draftFieldId) ?? null
+        : null;
+    const draftFieldLabel = draftField?.label ?? "Select CRM field";
+    const draftFieldMeta = draftField
+      ? `${draftField.core ? "Core" : "CRM"} • ${draftField.type}`
+      : "Choose where to map this column";
+    const isPickerOpen = openFieldPickerIndex === mapping.csvIndex;
+    const handleFieldSelection = (fieldId: string | null) => {
+      updateEditingDraft(fieldId);
+      setOpenFieldPickerIndex(null);
+    };
+    const toggleFieldPicker = () => {
+      setOpenFieldPickerIndex((current) =>
+        current === mapping.csvIndex ? null : mapping.csvIndex
+      );
+    };
+    const isFieldDisabled = (fieldId: string) =>
+      (selectedFieldCounts.get(fieldId) ?? 0) > 0 &&
+      mapping.selectedField !== fieldId;
+    const renderFieldOption = (field: ContactFieldWithMeta) => {
+      const disabled = isFieldDisabled(field.id);
+      const isSelectedField = draftFieldId === field.id;
+
+      return (
+        <button
+          key={`${mapping.csvColumn}-picker-${field.id}`}
+          type="button"
+          disabled={disabled}
+          onClick={() => handleFieldSelection(field.id)}
+          className={cn(
+            "flex w-full items-center justify-between gap-3 rounded-xl px-4 py-2 text-left transition",
+            disabled
+              ? "cursor-not-allowed opacity-40"
+              : "hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
+            isSelectedField && !disabled
+              ? "bg-primary/5 text-primary"
+              : "text-foreground"
+          )}
+        >
+          <div className="flex min-w-0 flex-col">
+            <span className="truncate text-sm font-semibold tracking-tight">
+              {field.label}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {field.core ? "Core" : "CRM"} • {field.type}
+            </span>
+          </div>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            {isSelectedField ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
+                Current
+                <Check className="h-3 w-3" aria-hidden="true" />
+              </span>
+            ) : null}
+            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {field.id}
+            </span>
+          </div>
+        </button>
+      );
+    };
 
     return (
       <div
         key={`${mapping.csvColumn}-${mapping.csvIndex}-detailed`}
         className={cn(
-          "rounded-2xl border bg-white/90 px-5 py-5 shadow-sm transition",
-          manualReview ? "border-destructive/40 bg-destructive/5" : "border-muted-foreground/20 hover:border-primary/30"
+          "rounded-2xl border bg-white px-5 py-5 transition ring-1 ring-transparent",
+          manualReview
+            ? "border-destructive/15 ring-destructive/15 shadow-[0_0_20px_rgba(239,68,68,0.2)]"
+            : "border-muted-foreground/20 shadow-sm hover:border-primary/30"
         )}
       >
-        <div className="flex flex-col gap-5 md:flex-row md:justify-between">
+        <div className="flex flex-col gap-6 md:flex-row md:items-stretch md:gap-8">
           <div className="flex-1 space-y-3">
-            <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-wide">
-              <span className="inline-flex items-center gap-2 rounded-full bg-indigo-500/10 px-3 py-1 text-indigo-600">
+            <div className="flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase tracking-wide">
+              <span className="inline-flex items-center gap-2 rounded-sm bg-purple-500/10 px-1.5 py-1 text-purple-500 ring-purple-500/50 ring">
                 Database Field
               </span>
               <span
                 className={cn(
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold capitalize",
+                  "inline-flex items-center gap-2 rounded-sm px-1.5 py-1 text-[10px] font-semibold capitalize ring-green-500/50 ring",
                   badgeClass
                 )}
               >
                 {`${score}% - ${confidenceLabel}`}
               </span>
             </div>
-            <p className="text-sm font-semibold text-foreground">{mapping.csvColumn}</p>
+            <p className="text-sm font-semibold text-foreground">
+              {mapping.csvColumn}
+            </p>
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <span className="font-semibold uppercase tracking-wide text-[11px]">
+              <span className="font-semibold camelcase tracking-wide text-[11px]">
                 Sample
               </span>
               {samplePreview.length ? (
                 samplePreview.map((sample) => (
                   <span
                     key={`${mapping.csvColumn}-detailed-sample-${sample}`}
-                    className="rounded-full bg-muted px-2 py-1"
+                    className="rounded-sm bg-muted px-1.5 py-1 text-[11px]"
                   >
                     {sample}
                   </span>
                 ))
               ) : (
-                <span className="text-muted-foreground/70">No data detected</span>
+                <span className="text-muted-foreground/70">
+                  No data detected
+                </span>
               )}
             </div>
-            <p className="text-xs text-muted-foreground">
-              {displayMatch?.matchReason ?? "Manual review recommended"}
-            </p>
           </div>
-          <div className="w-full max-w-xs space-y-3 md:w-80">
-            <div className="flex items-center justify-between">
-              <span className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
-                CRM Field
-              </span>
+          <div className="flex items-start justify-center md:justify-start">
+            <span className="flex h-11 w-11 items-start justify-center     text-blue-400  ">
+              <Link2 className="h-6 w-6" aria-hidden="true" />
+              <span className="sr-only">Linked mapping</span>
+            </span>
+          </div>
+          <div className="w-full md:max-w-sm">
+            <div className="rounded-2xl  px-4    ">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <span className="inline-flex items-center gap-1 rounded-sm bg-blue-200 ring ring-blue-300 text-blue-500 px-1.5 py-1 text-[10px] font-semibold uppercase tracking-wide  ">
+                  CRM Field
+                </span>
+                {isEditing ? (
+                  <div className="flex items-center gap-2 text-xs font-semibold text-primary">
+                    <button
+                      type="button"
+                      onClick={confirmEditing}
+                      className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-1 text-primary transition hover:bg-primary/20"
+                    >
+                      <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelEditing}
+                      className="inline-flex items-center gap-1 rounded-full bg-white/70 px-2 py-1 text-muted-foreground transition hover:bg-white"
+                    >
+                      <X className="h-3.5 w-3.5" aria-hidden="true" />
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
+                    <button
+                      type="button"
+                      onClick={() => handleResetMapping(mapping.csvIndex)}
+                      className="inline-flex items-center gap-1 px-2 py-1 transition hover:text-primary"
+                    >
+                      <RotateCw className="h-3 w-3" aria-hidden="true" />
+                      Reset
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => startEditing(mapping.csvIndex)}
+                      className="inline-flex items-center gap-1 px-2 py-1 transition hover:text-primary"
+                    >
+                      <Pencil className="h-3 w-3" aria-hidden="true" />
+                      Edit
+                    </button>
+                  </div>
+                )}
+              </div>
               {isEditing ? (
-                <div className="flex items-center gap-2 text-xs font-semibold text-primary">
-                  <button
-                    type="button"
-                    onClick={confirmEditing}
-                    className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-1 text-primary transition hover:bg-primary/20"
-                  >
-                    <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    onClick={cancelEditing}
-                    className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-1 text-muted-foreground transition hover:bg-muted/80"
-                  >
-                    <X className="h-3.5 w-3.5" aria-hidden="true" />
-                    Cancel
-                  </button>
+                <div
+                  className="mt-4 space-y-3"
+                  ref={fieldPickerContainerRef}
+                >
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={toggleFieldPicker}
+                      className={cn(
+                        "flex w-full items-center justify-between rounded-2xl border border-muted-foreground/30 bg-white px-4 py-3 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
+                        isPickerOpen && "border-primary shadow-lg"
+                      )}
+                    >
+                      <span className="flex flex-col">
+                        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          Selected field
+                        </span>
+                        <span className="text-base font-semibold text-foreground">
+                          {draftFieldLabel}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {draftFieldMeta}
+                        </span>
+                      </span>
+                      <ChevronDown
+                        className={cn(
+                          "h-4 w-4 text-muted-foreground transition",
+                          isPickerOpen && "rotate-180 text-primary"
+                        )}
+                        aria-hidden="true"
+                      />
+                    </button>
+                    {isPickerOpen ? (
+                      <div className="absolute left-0 z-30 mt-2 w-full overflow-hidden rounded-2xl border border-muted-foreground/20 bg-white shadow-2xl">
+                        <div className="space-y-1 border-b border-muted-foreground/10 bg-muted/20 px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={() => handleFieldSelection(null)}
+                            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-destructive transition hover:bg-destructive/5"
+                          >
+                            <Minus className="h-4 w-4" aria-hidden="true" />
+                            Don&apos;t import this field
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenFieldPickerIndex(null);
+                              handleCreateCustomField(
+                                mapping.csvColumn,
+                                mapping.csvIndex
+                              );
+                            }}
+                            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-primary transition hover:bg-primary/5"
+                          >
+                            <Sparkles className="h-4 w-4" aria-hidden="true" />
+                            Create Custom Field
+                          </button>
+                        </div>
+                        <div className="max-h-72 overflow-y-auto py-2">
+                          <div className="px-4 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            Core Fields
+                          </div>
+                          {coreFields.length ? (
+                            coreFields.map((field) => renderFieldOption(field))
+                          ) : (
+                            <p className="px-4 pb-2 text-xs text-muted-foreground">
+                              No core fields available
+                            </p>
+                          )}
+                          <div className="px-4 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            CRM Fields
+                          </div>
+                          {crmFields.length ? (
+                            crmFields.map((field) => renderFieldOption(field))
+                          ) : (
+                            <p className="px-4 pb-2 text-xs text-muted-foreground">
+                              No CRM fields available
+                            </p>
+                          )}
+                        </div>
+                        <div className="border-t border-muted-foreground/10 bg-muted/20 px-4 py-2 text-[11px] text-muted-foreground">
+                          Showing available CRM fields for this workspace
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {draftField
+                      ? "Pick another CRM field or save your changes."
+                      : "Select a CRM field to map this column."}
+                  </div>
                 </div>
               ) : (
-                <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
-                  <button
-                    type="button"
-                    onClick={() => handleResetMapping(mapping.csvIndex)}
-                    className="inline-flex items-center gap-1 rounded-full border border-muted-foreground/40 px-2 py-1 transition hover:border-primary/50 hover:text-primary"
-                  >
-                    <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                    Reset
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => startEditing(mapping.csvIndex)}
-                    className="inline-flex items-center gap-1 rounded-full border border-primary/30 px-2 py-1 text-primary transition hover:border-primary hover:bg-primary/10"
-                  >
-                    <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-                    Edit
-                  </button>
+                <div className="mt-4 rounded-xl   bg-white   py-1 text-sm  ">
+                  <p className="font-semibold text-blue-500">
+                    {displayFieldLabel}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {fieldMeta}
+                  </p>
                 </div>
               )}
             </div>
-            {isEditing ? (
-              <div className="space-y-3">
-                <select
-                  value={draftFieldId ?? ""}
-                  onChange={(event) => updateEditingDraft(event.target.value ? event.target.value : null)}
-                  className="w-full rounded-lg border border-muted-foreground/30 bg-white px-3 py-2 text-sm shadow-sm transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                >
-                  <option value="">-- Select Field --</option>
-                  {mapping.suggestedMatches.length > 0 ? (
-                    <optgroup label="Suggested Matches">
-                      {mapping.suggestedMatches.map((match) => {
-                        const disabled =
-                          (selectedFieldCounts.get(match.systemFieldId) ?? 0) > 0 &&
-                          mapping.selectedField !== match.systemFieldId;
-                        return (
-                          <option
-                            key={`${mapping.csvColumn}-detailed-suggested-${match.systemFieldId}`}
-                            value={match.systemFieldId}
-                            disabled={disabled}
-                          >
-                            {match.systemFieldLabel} ({match.confidence} - {match.score}pts) - {match.matchReason}
-                          </option>
-                        );
-                      })}
-                    </optgroup>
-                  ) : null}
-                  <optgroup label="All Fields">
-                    {contactFields.map((field) => {
-                      const disabled =
-                        (selectedFieldCounts.get(field.id) ?? 0) > 0 &&
-                        mapping.selectedField !== field.id;
-                      return (
-                        <option
-                          key={`${mapping.csvColumn}-detailed-all-${field.id}`}
-                          value={field.id}
-                          disabled={disabled}
-                        >
-                          {field.label}
-                        </option>
-                      );
-                    })}
-                  </optgroup>
-                </select>
-                <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                  <button
-                    type="button"
-                    onClick={() => updateEditingDraft(null)}
-                    className="text-sm font-medium text-muted-foreground transition hover:text-destructive"
-                  >
-                    Don&apos;t import this field
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleCreateCustomField(mapping.csvColumn, mapping.csvIndex)}
-                    className="text-sm font-medium text-primary transition hover:underline"
-                  >
-                    + Create Custom Field
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-lg border border-muted-foreground/20 bg-white px-3 py-2 text-sm">
-                <p className="font-semibold text-foreground">{displayFieldLabel}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{fieldMeta}</p>
-              </div>
-            )}
           </div>
         </div>
         {manualReview ? (
-          <div className="mt-4 inline-flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive">
+          <div className="mt-5 -mx-5 -mb-5 flex items-center justify-center gap-2 rounded-b-2xl   bg-destructive/15 px-5 py-1.5 text-xs font-semibold text-destructive">
             <AlertCircle className="h-4 w-4" aria-hidden="true" />
-            Manual review recommended
+            Manual Review Recommended
           </div>
         ) : null}
         {hasDuplicate ? (
@@ -1032,7 +1214,7 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
       onClick={handleClose}
     >
       <div
-        className="flex max-h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border bg-background shadow-2xl"
+        className="flex max-h-[85vh] w-full max-w-[50vw] lg:max-w-[50vw] flex-col overflow-hidden rounded-3xl border bg-background shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b px-6 py-4">
@@ -1053,14 +1235,29 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
         </header>
 
         <div className="border-b bg-muted/40">
-          <ol className="flex items-center justify-between px-6 py-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            <StepBadge label="Detect Fields" index={1} status={detectStatus} />
-            <StepBadge label="Map Fields" index={2} status={mapStatus} />
-            <StepBadge label="Final Checks" index={3} status={finalStatus} />
+          <ol className="flex items-center justify-between gap-6 px-6 py-3">
+            <StepBadge
+              label="Detect Fields"
+              description="Review data structure"
+              index={1}
+              status={detectStatus}
+            />
+            <StepBadge
+              label="Map Fields"
+              description="Connect to CRM Fields"
+              index={2}
+              status={mapStatus}
+            />
+            <StepBadge
+              label="Final Checks"
+              description="For Duplicates and Errors"
+              index={3}
+              status={finalStatus}
+            />
           </ol>
         </div>
 
-        <div className="flex flex-1 flex-col justify-between gap-8 overflow-y-auto bg-gradient-to-b from-background via-background to-muted/40 px-6 py-8">
+        <div className="import-modal-scroll flex flex-1 flex-col justify-between gap-8 overflow-y-auto bg-gradient-to-b from-background via-background to-muted/40 px-6 py-8">
           {!hasFile ? (
             <section className="space-y-6">
               <div className="space-y-3">
@@ -1128,11 +1325,11 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
                   Auto Detecting Field Mapping...
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                  Analyzing columns and matching with CRM fields using intelligent
-                  recognition.
+                  Analyzing columns and matching with CRM fields using
+                  intelligent recognition.
                 </p>
               </div>
-              <div className="flex flex-col items-center gap-6 rounded-2xl bg-white/80 p-10 text-center shadow-inner">
+              <div className="flex flex-col items-center gap-6 rounded-2xl bg-white/80 p-10 text-center ">
                 <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-md">
                   <Sparkles className="h-10 w-10" aria-hidden="true" />
                 </div>
@@ -1161,72 +1358,69 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
                       style={{ width: `${progressBarWidth}%` }}
                     />
                   </div>
-                  <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden="true" />
+                  <Loader2
+                    className="h-4 w-4 animate-spin text-primary"
+                    aria-hidden="true"
+                  />
                 </div>
               </div>
             </section>
           ) : isParsed ? (
-            <section className="space-y-8">
+            <section className="space-y-5">
               <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                 <div className="space-y-3">
                   <h2 className="text-lg font-semibold text-foreground">
-                    {mappingStage === "summary" ? "Column Detection Results" : "Smart Field Mapping"}
+                    {mappingStage === "summary"
+                      ? "Column Detection Results"
+                      : "Smart Field Mapping"}
                   </h2>
                   <p className="text-sm text-muted-foreground">
                     {mappingStage === "summary"
-                      ? "We matched any exact column names in your file with CRM contact fields. Review the suggestions below before continuing."
-                      : "Review and adjust the AI-powered field mappings below. Click \"Edit\" to update a mapping or create custom fields for unmatched columns."}
+                      ? `Our intelligent mapping has mapped ${detectedCount} fields in this entry with the CRM Contact Fields`
+                      : 'Review and adjust the AI-powered field mappings below. Click "Edit" next to any mapping to change it. You can map to existing CRM fields or create custom fields with different data types.'}
                   </p>
                 </div>
-                {mappingStage === "detailed" ? (
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <button
-                      type="button"
-                      onClick={handleResetAllMappings}
-                      className="inline-flex items-center gap-1 rounded-full border border-muted-foreground/40 px-3 py-1 font-semibold uppercase tracking-wide transition hover:border-primary/50 hover:text-primary"
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                      Reset to Default
-                    </button>
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1 rounded-full border border-muted-foreground/20 px-3 py-1 font-semibold uppercase tracking-wide text-muted-foreground/70"
-                      disabled
-                    >
-                      More Mapping Options
-                    </button>
-                  </div>
-                ) : null}
               </div>
+              {mappingStage === "detailed" ? (
+                <div className="flex w-full items-center justify-end gap-2 text-xs text-muted-foreground">
+                  <button
+                    type="button"
+                    onClick={handleResetAllMappings}
+                    className="inline-flex items-center gap-2 rounded-full   px-3  font-semibold camelcase tracking-wide transition hover:border-primary/50 hover:text-primary"
+                  >
+                    <RotateCw className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span className="leading-none">Reset to Default</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-2 rounded-full  px-3  font-semibold camelcase tracking-wide text-muted-foreground/70"
+                    disabled
+                  >
+                    <SlidersHorizontal
+                      className="h-3.5 w-3.5"
+                      aria-hidden="true"
+                    />
+                    <span className="leading-none">More Mapping Options</span>
+                  </button>
+                </div>
+              ) : null}
 
-              <div className="flex flex-wrap gap-3">
-                <SummaryPill
-                  tone="success"
-                  caption={`${detectedCount} Fields Detected`}
-                />
-                <SummaryPill
-                  tone="info"
-                  caption={`${highConfidenceCount} High Confidence`}
-                />
-                <SummaryPill
-                  tone="custom"
-                  caption={`${customFieldCount} Custom Fields`}
-                />
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-muted-foreground/20 bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
-                <Paperclip className="h-4 w-4" aria-hidden="true" />
-                <span className="truncate text-sm font-medium text-foreground">
-                  {file?.name}
-                </span>
-                <button
-                  type="button"
-                  onClick={reset}
-                  className="ml-auto inline-flex items-center rounded-full border border-muted-foreground/40 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground transition hover:border-primary/50 hover:text-primary"
-                >
-                  Choose another file
-                </button>
-              </div>
+              {mappingStage === "summary" ? (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <SummaryPill
+                    tone="success"
+                    caption={`${detectedCount} Fields Detected`}
+                  />
+                  <SummaryPill
+                    tone="info"
+                    caption={`${highConfidenceCount} High Confidence`}
+                  />
+                  <SummaryPill
+                    tone="custom"
+                    caption={`${customFieldCount} Custom Fields`}
+                  />
+                </div>
+              ) : null}
 
               {fieldsLoading ? (
                 <div className="flex items-center gap-2 rounded-xl border border-muted-foreground/20 bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
@@ -1247,7 +1441,10 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
               <div className="space-y-3">
                 {isAnalyzing ? (
                   <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-primary">
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    <Loader2
+                      className="h-4 w-4 animate-spin"
+                      aria-hidden="true"
+                    />
                     Analyzing field mappings...
                   </div>
                 ) : null}
@@ -1258,9 +1455,12 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
                   </div>
                 ) : null}
 
-                {columnMappings.length === 0 && !isAnalyzing && !mappingError ? (
-                  <div className="rounded-2xl border border-muted-foreground/20 bg-white/80 px-6 py-10 text-center text-sm text-muted-foreground shadow-inner">
-                    No columns detected in this file. Try uploading a different dataset.
+                {columnMappings.length === 0 &&
+                !isAnalyzing &&
+                !mappingError ? (
+                  <div className="rounded-2xl border border-muted-foreground/20 bg-white/80 px-6 py-10 text-center text-sm text-muted-foreground  ">
+                    No columns detected in this file. Try uploading a different
+                    dataset.
                   </div>
                 ) : null}
 
@@ -1271,7 +1471,7 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
             </section>
           ) : (
             <section className="space-y-6">
-              <div className="rounded-2xl border border-muted-foreground/20 bg-white/80 px-6 py-10 text-center shadow-inner">
+              <div className="rounded-2xl border border-muted-foreground/20 bg-white/80 px-6 py-10 text-center  ">
                 <p className="text-sm font-medium text-foreground">
                   Something went wrong while parsing this file.
                 </p>
@@ -1301,19 +1501,19 @@ export function ImportContactsModal({ open, onClose }: ImportContactsModalProps)
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <button
               type="button"
-            onClick={handlePreviousClick}
-            className="rounded-lg border px-4 py-2 font-medium transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={!hasFile}
-          >
-            Previous
-          </button>
-          <button
-            type="button"
-            onClick={handleNextClick}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
-            disabled={!canProceed}
-          >
-            Next
+              onClick={handlePreviousClick}
+              className="rounded-lg border px-4 py-2 font-medium transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={!hasFile}
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              onClick={handleNextClick}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
+              disabled={!canProceed}
+            >
+              Next
             </button>
           </div>
         </footer>
@@ -1426,29 +1626,38 @@ type SummaryPillProps = {
 
 function SummaryPill({ tone, caption }: SummaryPillProps) {
   const toneClasses: Record<SummaryPillProps["tone"], string> = {
-    success: "bg-emerald-500/10 text-emerald-600",
-    info: "bg-indigo-500/10 text-indigo-600",
-    custom: "bg-pink-500/10 text-pink-600",
+    success: "bg-emerald-500/10 text-emerald-600 ring-emerald-500/20",
+    info: "bg-indigo-500/10 text-indigo-600 ring-indigo-500/20",
+    custom: "bg-pink-500/10 text-pink-600 ring-pink-500/20",
   };
+  const toneIcons: Record<SummaryPillProps["tone"], LucideIcon> = {
+    success: Search,
+    info: Target,
+    custom: Wrench,
+  };
+  const Icon = toneIcons[tone];
 
   return (
-    <span
+    <div
       className={cn(
-        "inline-flex items-center gap-2 rounded-full px-4 py-2 text-[11px] font-semibold uppercase tracking-wide",
+        "flex w-full items-center justify-center gap-2 rounded-sm px-4 py-2 text-[11px] font-semibold uppercase tracking-wide ring",
         toneClasses[tone]
       )}
     >
+      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
       {caption}
-    </span>
+    </div>
   );
 }
 
 function StepBadge({
   label,
+  description,
   index,
   status,
 }: {
   label: string;
+  description: string;
   index: number;
   status: StepStatus;
 }) {
@@ -1458,22 +1667,17 @@ function StepBadge({
   return (
     <li
       className={cn(
-        "flex min-w-[120px] flex-1 items-center gap-3 rounded-full px-3 py-2 transition",
-        isComplete
-          ? "bg-emerald-500/10 text-emerald-600"
-          : isActive
-            ? "bg-primary/10 text-primary"
-            : "text-muted-foreground"
+        "flex min-w-[140px] flex-1 items-center gap-3 rounded-2xl px-2 py-1 transition"
       )}
     >
       <span
         className={cn(
-          "flex h-7 w-7 items-center justify-center rounded-full border text-sm font-semibold",
+          "flex h-9 w-9 items-center justify-center rounded-lg text-sm font-semibold transition",
           isComplete
-            ? "border-emerald-500 bg-emerald-500 text-white"
+            ? "bg-emerald-500 text-white shadow-sm"
             : isActive
-              ? "border-primary bg-primary text-primary-foreground"
-              : "border-muted-foreground/30 bg-background"
+            ? "bg-[#083F6D] text-white shadow-sm"
+            : "bg-muted text-muted-foreground"
         )}
       >
         {isComplete ? (
@@ -1482,8 +1686,27 @@ function StepBadge({
           index
         )}
       </span>
-      <span className="text-left text-[11px] font-semibold uppercase tracking-wide">
-        {label}
+      <span className="flex flex-col text-left leading-tight">
+        <span
+          className={cn(
+            "text-sm font-semibold",
+            isActive
+              ? "text-[#083F6D]"
+              : isComplete
+              ? "text-foreground"
+              : "text-muted-foreground"
+          )}
+        >
+          {label}
+        </span>
+        <span
+          className={cn(
+            "text-xs font-medium text-muted-foreground",
+            isActive && "text-[#3D5B7B]/80"
+          )}
+        >
+          {description}
+        </span>
       </span>
     </li>
   );
