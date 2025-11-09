@@ -1,7 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Ellipsis, Loader2, PlusCircle, Search, Settings2 } from "lucide-react";
+import {
+  Ellipsis,
+  Loader2,
+  PlusCircle,
+  Search,
+  Settings2,
+  Trash2,
+} from "lucide-react";
 import toast from "react-hot-toast";
 import { ImportContactsModal } from "@/components/import-contacts-modal";
 import { ManageCustomFieldsModal } from "@/components/manage-custom-fields-modal";
@@ -208,6 +215,7 @@ export default function ContactsPage() {
     null
   );
   const [searchQuery, setSearchQuery] = useState("");
+  const [isDeletingAllContacts, setIsDeletingAllContacts] = useState(false);
 
   useEffect(() => {
     if (!openContactActionsId) {
@@ -468,6 +476,48 @@ export default function ContactsPage() {
     );
   }, []);
 
+  const handleDeleteAllContacts = useCallback(async () => {
+    if (!COMPANY_ID) {
+      toast.error("Company configuration is missing.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "This will permanently delete every contact. Continue?"
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsDeletingAllContacts(true);
+
+    try {
+      const response = await fetch(
+        `/api/contacts/delete-all?companyId=${encodeURIComponent(COMPANY_ID)}`,
+        { method: "DELETE" }
+      );
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        const message =
+          payload?.error ?? `Request failed with status ${response.status}`;
+        throw new Error(message);
+      }
+
+      setContacts([]);
+      toast.success("All contacts deleted.");
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to delete contacts.";
+      console.error("Failed to delete contacts", err);
+      toast.error(message);
+    } finally {
+      setIsDeletingAllContacts(false);
+    }
+  }, [setContacts]);
+
   const handleDeleteContact = useCallback(
     async (contactId: string) => {
       if (!COMPANY_ID) {
@@ -533,6 +583,24 @@ export default function ContactsPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleDeleteAllContacts}
+              className="inline-flex items-center gap-2 rounded-lg border border-destructive/40 px-4 py-2 text-sm font-medium text-destructive shadow-sm transition hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={
+                !COMPANY_ID || !contacts.length || isDeletingAllContacts
+              }
+              title={
+                COMPANY_ID ? undefined : "Company configuration is missing."
+              }
+            >
+              {isDeletingAllContacts ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Trash2 className="h-4 w-4" aria-hidden="true" />
+              )}
+              Delete All
+            </button>
             <div className="relative min-w-[240px] flex-1 sm:flex-none sm:w-auto">
               <Search
                 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
